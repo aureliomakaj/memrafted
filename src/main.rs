@@ -68,6 +68,10 @@ impl Pool {
 
     //Add a new server
     pub fn add_server(&mut self, server_id: String) {
+        let mut keys = vec![];
+        for i in 0..100 {
+            keys.push(format!("{}_{}", server_id, i));
+        }
         // Compute the hash of the server name
         let hashed_srv_id = hash_function(&server_id);
         let cloned = server_id.clone();
@@ -75,8 +79,11 @@ impl Pool {
         info!("Adding server {} with hashed key {}", cloned, hashed_srv_id);
         // Create a new memrafted instace and map it to the server name
         self.server_map.insert(server_id, Memrafted::new());
+        for key in keys {
+            self.ring.insert(hash_function(&key), cloned.clone());
+        }
         // Map the hash of the server name to the server name
-        self.ring.insert(hashed_srv_id, cloned);
+        
     }
 
     // Get tthe value cached for that key
