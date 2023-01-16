@@ -15,12 +15,9 @@ POST /set-key
 with the following JSON body:
 
 { 
-    "key": "key_1", 
-    "value": { 
-        "variant": "String", 
-        "content": "value_1"  
-    }, 
-    "expiration": 60 
+    "key": "key_1",
+    "value": "value_1",
+    "expiration": 60
 }
 
 Function: Cache a value at a given key
