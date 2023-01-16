@@ -27,14 +27,14 @@ where
 
 #[derive(Deserialize)]
 pub struct GetKeyQueryParams {
-    key: KeyType,
+    pub key: KeyType,
 }
 
 #[derive(Deserialize)]
 pub struct SetKeyJsonBody {
-    key: KeyType,
-    value: ValueType,
-    expiration: u64,
+    pub key: KeyType,
+    pub value: ValueType,
+    pub expiration: u64,
 }
 
 #[derive(Deserialize)]

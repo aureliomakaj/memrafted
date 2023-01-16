@@ -2,13 +2,15 @@ pub mod local;
 
 use std::time::Instant;
 
+use serde::{Serialize, Deserialize};
+
 /// Type of the key in the cache
 pub type KeyType = String;
 /// Type that can be stored in the cache
 pub type ValueType = String;
 
 /// Struct that describe a cached entity
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedInfo {
     /// The value stored
     value: ValueType,
@@ -17,8 +19,10 @@ pub struct CachedInfo {
     expiration: u64,
 
     /// Time of when the value was inserted or updated
+    #[serde(with = "serde_millis")]
     creation: Instant,
 }
+
 
 pub trait Cache {
     /// Creates new empty cache
