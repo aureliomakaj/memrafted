@@ -1,8 +1,10 @@
 use std::{collections::HashMap, time::Instant};
 
+use serde::{Serialize, Deserialize};
+
 use super::{Cache, KeyType, CachedInfo, ValueType};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LocalCache {
     map: HashMap<String, CachedInfo>,
 }

@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use actix_web::{web, Responder, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cache::{Cache, KeyType, ValueType};
 
@@ -30,7 +30,7 @@ pub struct GetKeyQueryParams {
     pub key: KeyType,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct SetKeyJsonBody {
     pub key: KeyType,
     pub value: ValueType,

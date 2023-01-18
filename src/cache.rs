@@ -23,7 +23,6 @@ pub struct CachedInfo {
     creation: Instant,
 }
 
-
 pub trait Cache {
     /// Creates new empty cache
     fn new() -> Self;

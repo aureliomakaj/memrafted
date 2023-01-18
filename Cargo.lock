@@ -780,12 +780,17 @@ name = "memrafted"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "anyhow",
  "async-raft",
  "env_logger",
  "log",
  "serde",
+ "serde_json",
  "serde_millis",
+ "thiserror",
  "tokio",
+ "tracing",
+ "tracing-futures",
 ]
 
 [[package]]
