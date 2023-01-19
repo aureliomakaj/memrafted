@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     hash::Hash,
     sync::{
+        mpsc::{channel, Receiver, Sender},
         //mpsc::{channel, Receiver, Sender},
         Arc, Mutex,
     },
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tokio::sync::{RwLockReadGuard, RwLockWriteGuard, mpsc::{channel, Receiver, Sender}};
+use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     cache::{local::LocalCache, Cache, CachedInfo, KeyType, ValueType},
@@ -76,7 +77,7 @@ where
     T: NetworkNode + Send + Sync + 'static,
 {
     pub nodes: Mutex<HashMap<NodeId, T>>,
-    pub channels: Mutex<HashMap<NodeId, (Sender<Arc<NetworkRequest>>, Receiver<Arc<NetworkResponse>>)>>,
+    pub channels: Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>,
 }
 
 impl<T> Network<T>
@@ -90,9 +91,9 @@ where
         }
     }
 
-    pub fn add_node(&mut self, id: NodeId, network: Arc<Network<T>>) {
-        let (req_send, req_receive) = channel::<Arc<NetworkRequest>>(1);
-        let (resp_send, resp_receive) = channel::<Arc<NetworkResponse>>(1);
+    pub fn add_node(&mut self, id: NodeId, network: Arc<Mutex<Network<T>>>) {
+        let (req_send, req_receive) = channel::<NetworkRequest>();
+        let (resp_send, resp_receive) = channel::<NetworkResponse>();
         let cloned_self = Arc::clone(&network);
         let node = NetworkNode::new(id, req_receive, resp_send,cloned_self);
         self.nodes.lock().unwrap().insert(id, node);
@@ -102,16 +103,63 @@ where
             .insert(id, (req_send, resp_receive));
     }
 
-    pub async fn send(&self, target: NodeId, req: Arc<NetworkRequest>) -> Arc<NetworkResponse> {
+    pub fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
         let mut channel = self.channels.lock().unwrap();
         let sender = channel.get_mut(&target);
         match sender {
             Some(ch) => {
-                let send = (*ch).0.send(Arc::clone(&req)).await.unwrap();
-                let res = (*ch).1.recv().await.unwrap();
-                Arc::clone(&res)
+                (*ch).0.send(req).unwrap();
+                (*ch).1.recv().unwrap()
             }
             None => panic!("Not a valid target"),
+        }
+    }
+}
+
+/// Implementation of RaftNetwork trait to show how Raft should communicate with the other nodes
+#[async_trait]
+impl<T> RaftNetwork<SetKeyJsonBody> for Mutex<Network<T>>
+where
+    T: NetworkNode,
+{
+    async fn append_entries(
+        &self,
+        target: NodeId,
+        rpc: AppendEntriesRequest<SetKeyJsonBody>,
+    ) -> Result<AppendEntriesResponse> {
+        
+        let res = self.lock().unwrap().send(target, NetworkRequest::AppendEntries(rpc));
+    
+        match res {
+            NetworkResponse::BaseResponse(_) => panic!("Expected AppendResponse"),
+            NetworkResponse::AppendResponse(r) => Ok(r),
+            NetworkResponse::InstallResponse(_) => panic!("Expected AppendResponse"),
+            NetworkResponse::VoteResponse(_) => panic!("Expected AppendResponse"),
+        }
+        
+    }
+
+    async fn install_snapshot(
+        &self,
+        target: NodeId,
+        rpc: InstallSnapshotRequest,
+    ) -> Result<InstallSnapshotResponse> {
+        let res = self.lock().unwrap().send(target, NetworkRequest::InstallSnapshot(rpc));
+        match res {
+            NetworkResponse::BaseResponse(_) => panic!("Expected InstallResponse"),
+            NetworkResponse::AppendResponse(_) => panic!("Expected InstallResponse"),
+            NetworkResponse::InstallResponse(r) => Ok(r),
+            NetworkResponse::VoteResponse(_) => panic!("Expected InstallResponse"),
+        }
+    }
+
+    async fn vote(&self, target: NodeId, rpc: VoteRequest) -> Result<VoteResponse> {
+        let res = self.lock().unwrap().send(target, NetworkRequest::Vote(rpc));
+        match res {
+            NetworkResponse::BaseResponse(_) => panic!("Expected VoteResponse"),
+            NetworkResponse::AppendResponse(_) => panic!("Expected VoteResponse"),
+            NetworkResponse::InstallResponse(_) => panic!("Expected VoteResponse"),
+            NetworkResponse::VoteResponse(r) => Ok(r),
         }
     }
 }
@@ -119,9 +167,9 @@ where
 pub trait NetworkNode: Send + Sync + 'static {
     fn new(
         id: NodeId,
-        req_channel: Receiver<Arc<NetworkRequest>>,
-        resp_channel: Sender<Arc<NetworkResponse>>,
-        net: Arc<Network<Self>>,
+        req_channel: Receiver<NetworkRequest>,
+        resp_channel: Sender<NetworkResponse>,
+        net: Arc<Mutex<Network<Self>>>
     ) -> Self
     where
         Self: Sized;
@@ -531,56 +579,9 @@ where
     }
 }
 
-/// Implementation of RaftNetwork trait to show how Raft should communicate with the other nodes
-#[async_trait]
-impl<T> RaftNetwork<SetKeyJsonBody> for Network<T>
-where
-    T: NetworkNode,
-{
-    async fn append_entries(
-        &self,
-        target: NodeId,
-        rpc: AppendEntriesRequest<SetKeyJsonBody>,
-    ) -> Result<AppendEntriesResponse> {
-        
-        let res = self.send(target, Arc::new(NetworkRequest::AppendEntries(rpc))).await;
-    
-        match *res {
-            NetworkResponse::BaseResponse(_) => panic!("Expected AppendResponse"),
-            NetworkResponse::AppendResponse(r) => Ok(r),
-            NetworkResponse::InstallResponse(_) => panic!("Expected AppendResponse"),
-            NetworkResponse::VoteResponse(_) => panic!("Expected AppendResponse"),
-        }
-        
-    }
-
-    async fn install_snapshot(
-        &self,
-        target: NodeId,
-        rpc: InstallSnapshotRequest,
-    ) -> Result<InstallSnapshotResponse> {
-        let res = self.send(target, NetworkRequest::InstallSnapshot(rpc));
-        match res {
-            NetworkResponse::BaseResponse(_) => panic!("Expected InstallResponse"),
-            NetworkResponse::AppendResponse(_) => panic!("Expected InstallResponse"),
-            NetworkResponse::InstallResponse(r) => Ok(r),
-            NetworkResponse::VoteResponse(_) => panic!("Expected InstallResponse"),
-        }
-    }
-
-    async fn vote(&self, target: NodeId, rpc: VoteRequest) -> Result<VoteResponse> {
-        let res = self.send(target, NetworkRequest::Vote(rpc));
-        match res {
-            NetworkResponse::BaseResponse(_) => panic!("Expected VoteResponse"),
-            NetworkResponse::AppendResponse(_) => panic!("Expected VoteResponse"),
-            NetworkResponse::InstallResponse(_) => panic!("Expected VoteResponse"),
-            NetworkResponse::VoteResponse(r) => Ok(r),
-        }
-    }
-}
 
 /// Raft node
-type MemraftedNode<N, C> = Raft<SetKeyJsonBody, StorageResponse, Network<N>, RaftCache<C>>;
+type MemraftedNode<N, C> = Raft<SetKeyJsonBody, StorageResponse, Mutex<Network<N>>, RaftCache<C>>;
 
 pub struct RaftNode {
     id: NodeId,
@@ -590,64 +591,53 @@ pub struct RaftNode {
 impl NetworkNode for RaftNode {
     fn new(
         id: NodeId,
-        req_channel: Receiver<Arc<NetworkRequest>>,
-        resp_channel: Sender<Arc<NetworkResponse>>,
-        net: Arc<Network<Self>>,
+        req_channel: Receiver<NetworkRequest>,
+        resp_channel: Sender<NetworkResponse>,
+        net: Arc<Mutex<Network<Self>>>,
     ) -> Self {
         let thread = tokio::spawn(async move {
+            let mut req_mut_channel = req_channel;
+
             let config = Arc::new(
                 Config::build("primary-raft-group".into())
                     .validate()
                     .expect("failed to build Raft config"),
             );
             let storage = Arc::new(RaftCache::<LocalCache>::new(id));
-            let node = MemraftedNode::new(id, config, net, storage);
+            let clone1 = Arc::clone(&storage);
+            let node = MemraftedNode::new(id, config, net, clone1);
             
             loop {
-                let request = req_channel.recv().await.unwrap();
-                match *request {
+                let request = req_mut_channel.recv().unwrap();
+                match request {
                     NetworkRequest::GetKey(query_params) => {
-                        let mut sm = storage.sm.blocking_write();
+                        let clone2 = Arc::clone(&storage);
+                        let mut sm = clone2.sm.blocking_write();
                         let res = sm.cache.get(&query_params.key);
                         info!("Getting key {} from node {}", query_params.key, id.clone());
                         //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel
-                            .send(Arc::new(NetworkResponse::BaseResponse(res)))
-                            .await
-                            .unwrap();
+                        resp_channel.send(NetworkResponse::BaseResponse(res)).unwrap();
                     }
                     NetworkRequest::SetKey(json_body) => {
-                        node.client_write(ClientWriteRequest::new(json_body));
                         info!("Setting key {} to node {}", json_body.key, id.clone());
+                        node.client_write(ClientWriteRequest::new(json_body)).await.unwrap();
                         //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel
-                            .send(Arc::new(NetworkResponse::BaseResponse(None)))
-                            .await
-                            .unwrap();
+                        resp_channel.send(NetworkResponse::BaseResponse(None)).unwrap();
                     }
                     NetworkRequest::AppendEntries(rpc) => {
                         let res = node.append_entries(rpc).await.unwrap();
                         //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel
-                            .send(Arc::new(NetworkResponse::AppendResponse(res)))
-                            .await
-                            .unwrap();
+                        resp_channel.send(NetworkResponse::AppendResponse(res)).unwrap();
                     }
                     NetworkRequest::InstallSnapshot(rpc) => {
                         let res = node.install_snapshot(rpc).await.unwrap();
                         //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel
-                            .send(Arc::new(NetworkResponse::InstallResponse(res)))
-                            .await
-                            .unwrap();
+                        resp_channel.send(NetworkResponse::InstallResponse(res)).unwrap();
                     }
                     NetworkRequest::Vote(rpc) => {
                         let res = node.vote(rpc).await.unwrap();
                         //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel
-                            .send(Arc::new(NetworkResponse::VoteResponse(res)))
-                            .await
-                            .unwrap();
+                        resp_channel.send(NetworkResponse::VoteResponse(res)).unwrap();
                     }
                 }
             };
@@ -658,13 +648,13 @@ impl NetworkNode for RaftNode {
     }
 }
 
-pub struct RaftOrchestrator<N, C>
+pub struct RaftOrchestrator<N>
 where
-    N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
+    N: NetworkNode
+   // C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     pub last_node: NodeId,
-    pub raft_network: HashMap<NodeId, MemraftedNode<N, C>>,
+    pub network: Arc<Mutex<Network<N>>>,
     /// Map of server key with the actual server
     // cache_map: HashMap<String, T>,
     pub nodes: HashMap<String, NodeId>,
@@ -672,10 +662,10 @@ where
     pub ring: BTreeMap<u64, NodeId>,
 }
 
-impl<N, C> RaftOrchestrator<N, C>
+impl<N> RaftOrchestrator<N>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
+    //C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     /// Implementation of "Ketama Consistent Hashing".
     /// The server key is hashed, and inserted in the ring, possibly multiple times.
@@ -707,16 +697,15 @@ where
     }
 }
 
-#[async_trait]
-impl<N, C> Cache for RaftOrchestrator<N, C>
+impl<N> Cache for RaftOrchestrator<N>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
+//    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     fn new() -> Self {
         RaftOrchestrator {
             last_node: 0,
-            raft_network: HashMap::new(),
+            network: Arc::new(Mutex::new(Network::new())),
             nodes: HashMap::new(),
             ring: BTreeMap::new(),
         }
@@ -727,10 +716,8 @@ where
         let target = self.get_target_node(hashed_key);
         match target {
             Some(t) => {
-                let node = self.raft_network.get(&t).unwrap();
-                let leader = node.current_leader().await.unwrap();
                 let req = GetKeyQueryParams { key: key.clone() };
-                let res = self.raft_network.send(leader, NetworkRequest::GetKey(req));
+                let res = self.network.lock().unwrap().send(t, NetworkRequest::GetKey(req));
                 if let NetworkResponse::BaseResponse(s) = res {
                     return s;
                 }
@@ -749,27 +736,20 @@ where
                 value,
                 expiration,
             };
-            let node = self.raft_network.get(&t).unwrap();
-            let rpc = ClientWriteRequest::new(SetKeyJsonBody {
-                key: String::from(key),
-                value,
-                expiration,
-            });
-            let res = (*node).client_write(rpc).await;
-            //self.network.send(t, NetworkRequest::SetKey(req));
+            self.network.lock().unwrap().send(t, NetworkRequest::SetKey(req));
         }
     }
 }
 
-impl<N, C> Orchestrator for RaftOrchestrator<N, C>
+impl<N> Orchestrator for RaftOrchestrator<N>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
+    //C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     ///Add a new cache to the pool
     fn add_cache(&mut self, name: String) {
         let node_id = self.last_node + 1;
-        self.network.add_node(node_id);
+        self.network.lock().unwrap().add_node(node_id, Arc::clone(&self.network));
         self.nodes.insert(name.clone(), node_id);
 
         let mut keys = vec![];
