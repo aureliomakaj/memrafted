@@ -1,6 +1,7 @@
 use core::panic;
 use std::{
-    collections::{BTreeMap, HashMap},
+    
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
     sync::{
         mpsc::{channel, Receiver, Sender},
@@ -109,7 +110,11 @@ where
         match sender {
             Some(ch) => {
                 (*ch).0.send(req).unwrap();
-                (*ch).1.recv().unwrap()
+                let res = (*ch).1.recv();
+                match res {
+                    Ok(s) => s,
+                    Err(err) => panic!("{}", err.to_string())
+                }
             }
             None => panic!("Not a valid target"),
         }
@@ -605,14 +610,25 @@ impl NetworkNode for RaftNode {
             );
             let storage = Arc::new(RaftCache::<LocalCache>::new(id));
             let clone1 = Arc::clone(&storage);
-            let node = MemraftedNode::new(id, config, net, clone1);
-            
+            let net_clone = Arc::clone(&net);
+            let mut hash_set = HashSet::new();
+            hash_set.insert(id.clone());
+            for (k, v) in net_clone.lock().unwrap().nodes.lock().unwrap().iter() {
+                println!("{}", k);
+                hash_set.insert(k.clone());
+            }
+            let node = MemraftedNode::new(id, config, net_clone, clone1);
+            let add = node.initialize(hash_set).await;
+            if let Err(err) = add {
+                panic!("{}", err.to_string());
+            }
+
             loop {
                 let request = req_mut_channel.recv().unwrap();
                 match request {
                     NetworkRequest::GetKey(query_params) => {
                         let clone2 = Arc::clone(&storage);
-                        let mut sm = clone2.sm.blocking_write();
+                        let mut sm = clone2.sm.write().await;
                         let res = sm.cache.get(&query_params.key);
                         info!("Getting key {} from node {}", query_params.key, id.clone());
                         //let resp_unlocked = resp_channel.lock().unwrap();
@@ -620,9 +636,18 @@ impl NetworkNode for RaftNode {
                     }
                     NetworkRequest::SetKey(json_body) => {
                         info!("Setting key {} to node {}", json_body.key, id.clone());
-                        node.client_write(ClientWriteRequest::new(json_body)).await.unwrap();
-                        //let resp_unlocked = resp_channel.lock().unwrap();
-                        resp_channel.send(NetworkResponse::BaseResponse(None)).unwrap();
+                        let leader_id = node.current_leader().await.unwrap();
+                        if leader_id != id {
+                            let net_clone = Arc::clone(&net);
+                            net_clone.lock().unwrap().send(leader_id, NetworkRequest::SetKey(json_body));
+                        }else{
+                            let res = node.client_write(ClientWriteRequest::new(json_body)).await;
+                            if let Err(err) = res {
+                                panic!("{}", err.to_string());
+                            }
+                            //let resp_unlocked = resp_channel.lock().unwrap();
+                            resp_channel.send(NetworkResponse::BaseResponse(None)).unwrap();
+                        }
                     }
                     NetworkRequest::AppendEntries(rpc) => {
                         let res = node.append_entries(rpc).await.unwrap();
@@ -767,5 +792,7 @@ where
         for key in keys {
             self.ring.insert(hash(&key), node_id);
         }
+
+        self.last_node = node_id;
     }
 }
