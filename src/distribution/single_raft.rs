@@ -1,19 +1,44 @@
 use core::panic;
-use std::{collections::{HashMap, BTreeMap}, sync::{mpsc::{Receiver, Sender, channel}, Mutex, Arc}, thread::{JoinHandle, sleep}, time::Duration, hash::Hash};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+    sync::{
+        //mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread::{sleep, JoinHandle},
+    time::Duration,
+};
 
-use async_raft::{AppData, AppDataResponse, NodeId, RaftNetwork, raft::{MembershipConfig, Entry, EntryPayload, AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse, VoteRequest, VoteResponse, ClientWriteRequest}, storage::{HardState, InitialState, CurrentSnapshotData}, RaftStorage, async_trait::async_trait, Raft, Config};
-use log::info;
-use serde::{Serialize, Deserialize};
-use thiserror::Error;
 use anyhow::Result;
-use tokio::sync::RwLock;
-use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+use async_raft::{
+    async_trait::async_trait,
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, ClientWriteRequest, Entry, EntryPayload,
+        InstallSnapshotRequest, InstallSnapshotResponse, MembershipConfig, VoteRequest,
+        VoteResponse,
+    },
+    storage::{CurrentSnapshotData, HardState, InitialState},
+    AppData, AppDataResponse, Config, NodeId, Raft, RaftNetwork, RaftStorage,
+};
+use log::info;
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
+use thiserror::Error;
+use tokio::sync::RwLock;
+use tokio::sync::{RwLockReadGuard, RwLockWriteGuard, mpsc::{channel, Receiver, Sender}};
 
-use crate::{cache::{CachedInfo, Cache, local::LocalCache, ValueType, KeyType}, hash::hash};
+use crate::{
+    cache::{local::LocalCache, Cache, CachedInfo, KeyType, ValueType},
+    hash::hash,
+};
 
-use super::{server::{GetKeyQueryParams, SetKeyJsonBody}, Orchestrator};
+use super::{
+    server::{GetKeyQueryParams, SetKeyJsonBody},
+    Orchestrator,
+};
 
+#[derive(Debug)]
 /// Possible type of requests our thread server can handle
 pub enum NetworkRequest {
     GetKey(GetKeyQueryParams),
@@ -21,75 +46,86 @@ pub enum NetworkRequest {
     /// The following variants are for Raft
     AppendEntries(AppendEntriesRequest<SetKeyJsonBody>),
     InstallSnapshot(InstallSnapshotRequest),
-    Vote(VoteRequest)
+    Vote(VoteRequest),
 }
 
+#[derive(Debug)]
 /// Responses returned by a thread
 pub enum NetworkResponse {
     BaseResponse(Option<String>),
     /// The following variants are for Raft
     AppendResponse(AppendEntriesResponse),
     InstallResponse(InstallSnapshotResponse),
-    VoteResponse(VoteResponse)
+    VoteResponse(VoteResponse),
 }
 
 /// The response that the storage give back
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct StorageResponse(Option<String>);
 
-
 /// Simulation of a network of cache servers.
 /// Each node is a thead and is mapped to an identifier.
 /// The communication happens using two channels, one for the request and one for the response.
 /// Sender<NetworkRequest> is used to send the network request (and is owned by Network), that is received by the thread
-/// through Receiver<NetworkRequest> (owned by the thread). 
+/// through Receiver<NetworkRequest> (owned by the thread).
 /// The thread elaborate the result and send it back through Sender<NetworkResponse> (owned by the thread), and the value
-/// is received by the Network struct through Receiver<NetworkResponse> 
+/// is received by the Network struct through Receiver<NetworkResponse>
+#[derive(Debug)]
 pub struct Network<T>
 where
-    T: NetworkNode + Send + Sync + 'static
+    T: NetworkNode + Send + Sync + 'static,
 {
     pub nodes: Mutex<HashMap<NodeId, T>>,
-    pub channels: Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>
+    pub channels: Mutex<HashMap<NodeId, (Sender<Arc<NetworkRequest>>, Receiver<Arc<NetworkResponse>>)>>,
 }
 
 impl<T> Network<T>
 where
-    T: NetworkNode
+    T: NetworkNode,
 {
     pub fn new() -> Network<T> {
-        Network { 
-            nodes: Mutex::new(HashMap::new()), 
+        Network {
+            nodes: Mutex::new(HashMap::new()),
             channels: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn add_node(&mut self, id: NodeId, network: Arc<Network<T>>) {
-        let (req_send, req_receive ) = channel::<NetworkRequest>();
-        let (resp_send, resp_receive) = channel::<NetworkResponse>();
+        let (req_send, req_receive) = channel::<Arc<NetworkRequest>>(1);
+        let (resp_send, resp_receive) = channel::<Arc<NetworkResponse>>(1);
         let cloned_self = Arc::clone(&network);
-        let node = NetworkNode::new(id, req_receive, resp_send, cloned_self);
+        let node = NetworkNode::new(id, req_receive, resp_send,cloned_self);
         self.nodes.lock().unwrap().insert(id, node);
-        self.channels.lock().unwrap().insert(id, (req_send, resp_receive));
+        self.channels
+            .lock()
+            .unwrap()
+            .insert(id, (req_send, resp_receive));
     }
 
-    pub fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
-        let channel = self.channels.lock().unwrap();
-        let sender = channel.get(&target);
+    pub async fn send(&self, target: NodeId, req: Arc<NetworkRequest>) -> Arc<NetworkResponse> {
+        let mut channel = self.channels.lock().unwrap();
+        let sender = channel.get_mut(&target);
         match sender {
             Some(ch) => {
-                (*ch).0.send(req).unwrap();
-                (*ch).1.recv().unwrap()
-            },
-            None => panic!("Not a valid target")
+                let send = (*ch).0.send(Arc::clone(&req)).await.unwrap();
+                let res = (*ch).1.recv().await.unwrap();
+                Arc::clone(&res)
+            }
+            None => panic!("Not a valid target"),
         }
     }
-} 
-
-pub trait NetworkNode: Send + Sync + 'static {
-    fn new(id: NodeId, req_channel: Receiver<NetworkRequest>, resp_channel: Sender<NetworkResponse>, net: Arc<Network<Self>>) -> Self where Self: Sized;
 }
 
+pub trait NetworkNode: Send + Sync + 'static {
+    fn new(
+        id: NodeId,
+        req_channel: Receiver<Arc<NetworkRequest>>,
+        resp_channel: Sender<Arc<NetworkResponse>>,
+        net: Arc<Network<Self>>,
+    ) -> Self
+    where
+        Self: Sized;
+}
 
 impl AppData for SetKeyJsonBody {}
 impl AppDataResponse for StorageResponse {}
@@ -118,18 +154,18 @@ pub struct MemStoreSnapshot {
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct StateMachine<T>
 where
-    T: Cache
+    T: Cache,
 {
     ///Last applied log
     pub last_applied_log: u64,
     /// Cache system
-    pub cache: T
+    pub cache: T,
 }
 
 /// Struct that represents the storage engine of a Raft node
 pub struct RaftCache<T>
-where 
-    T: Cache
+where
+    T: Cache,
 {
     /// The ID of the Raft node for which this memory storage instances is configured.
     pub id: NodeId,
@@ -145,19 +181,19 @@ where
 
 impl<T> RaftCache<T>
 where
-    T: Cache 
+    T: Cache,
 {
     fn new(id: NodeId) -> Self {
         let state_machine = StateMachine {
             last_applied_log: 0,
-            cache: T::new()
+            cache: T::new(),
         };
         RaftCache {
             id,
             log: RwLock::new(BTreeMap::new()),
             sm: RwLock::new(state_machine),
             hs: RwLock::new(None),
-            current_snapshot: RwLock::new(None)
+            current_snapshot: RwLock::new(None),
         }
     }
 }
@@ -166,7 +202,7 @@ where
 #[async_trait]
 impl<T> RaftStorage<SetKeyJsonBody, StorageResponse> for RaftCache<T>
 where
-    T: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static
+    T: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     /// The storage engine's associated type used for exposing a snapshot for reading & writing.
     type Snapshot = Cursor<Vec<u8>>;
@@ -302,11 +338,15 @@ where
     ///
     /// The Raft protocol guarantees that only logs which have been _committed_, that is, logs which
     /// have been replicated to a majority of the cluster, will be applied to the state machine.
-    /// 
+    ///
     /// It is important to note that even in cases where an application specific error is returned,
     /// implementations should still record that the entry has been applied to the state machine.
     #[tracing::instrument(level = "trace", skip(self, data))]
-    async fn apply_entry_to_state_machine(&self, index: &u64, data: &SetKeyJsonBody) -> Result<StorageResponse> {
+    async fn apply_entry_to_state_machine(
+        &self,
+        index: &u64,
+        data: &SetKeyJsonBody,
+    ) -> Result<StorageResponse> {
         let mut sm = self.sm.write().await;
         sm.last_applied_log = *index;
         sm.cache.set(&data.key, data.value.clone(), data.expiration);
@@ -369,7 +409,12 @@ where
             *log = log.split_off(&last_applied_log);
             log.insert(
                 last_applied_log,
-                Entry::new_snapshot_pointer(last_applied_log, term, "".into(), membership_config.clone()),
+                Entry::new_snapshot_pointer(
+                    last_applied_log,
+                    term,
+                    "".into(),
+                    membership_config.clone(),
+                ),
             );
 
             let snapshot = MemStoreSnapshot {
@@ -382,7 +427,10 @@ where
             *current_snapshot = Some(snapshot);
         } // Release log & snapshot write locks.
 
-        tracing::trace!({ snapshot_size = snapshot_bytes.len() }, "log compaction complete");
+        tracing::trace!(
+            { snapshot_size = snapshot_bytes.len() },
+            "log compaction complete"
+        );
         Ok(CurrentSnapshotData {
             term,
             index: last_applied_log,
@@ -410,13 +458,22 @@ where
     /// All other snapshots should be deleted at this point
     #[tracing::instrument(level = "trace", skip(self, snapshot))]
     async fn finalize_snapshot_installation(
-        &self, index: u64, term: u64, delete_through: Option<u64>, id: String, snapshot: Box<Self::Snapshot>,
+        &self,
+        index: u64,
+        term: u64,
+        delete_through: Option<u64>,
+        id: String,
+        snapshot: Box<Self::Snapshot>,
     ) -> Result<()> {
-        tracing::trace!({ snapshot_size = snapshot.get_ref().len() }, "decoding snapshot for installation");
+        tracing::trace!(
+            { snapshot_size = snapshot.get_ref().len() },
+            "decoding snapshot for installation"
+        );
         let raw = serde_json::to_string_pretty(snapshot.get_ref().as_slice())?;
         println!("JSON SNAP:\n{}", raw);
-        
-        let new_snapshot: &mut MemStoreSnapshot = Box::leak(serde_json::from_slice(snapshot.get_ref().as_slice())?);
+
+        let new_snapshot: &mut MemStoreSnapshot =
+            Box::leak(serde_json::from_slice(snapshot.get_ref().as_slice())?);
         // Update log.
         {
             // Go backwards through the log to find the most recent membership config <= the `through` index.
@@ -437,7 +494,10 @@ where
                 }
                 None => log.clear(),
             }
-            log.insert(index, Entry::new_snapshot_pointer(index, term, id, membership_config));
+            log.insert(
+                index,
+                Entry::new_snapshot_pointer(index, term, id, membership_config),
+            );
         }
 
         // Update the state machine.
@@ -473,22 +533,25 @@ where
 
 /// Implementation of RaftNetwork trait to show how Raft should communicate with the other nodes
 #[async_trait]
-impl<T> RaftNetwork<SetKeyJsonBody> for Network<T> 
-where 
-    T: NetworkNode 
+impl<T> RaftNetwork<SetKeyJsonBody> for Network<T>
+where
+    T: NetworkNode,
 {
     async fn append_entries(
         &self,
         target: NodeId,
         rpc: AppendEntriesRequest<SetKeyJsonBody>,
     ) -> Result<AppendEntriesResponse> {
-        let res = self.send(target, NetworkRequest::AppendEntries(rpc));
-        match res {
+        
+        let res = self.send(target, Arc::new(NetworkRequest::AppendEntries(rpc))).await;
+    
+        match *res {
             NetworkResponse::BaseResponse(_) => panic!("Expected AppendResponse"),
             NetworkResponse::AppendResponse(r) => Ok(r),
             NetworkResponse::InstallResponse(_) => panic!("Expected AppendResponse"),
             NetworkResponse::VoteResponse(_) => panic!("Expected AppendResponse"),
         }
+        
     }
 
     async fn install_snapshot(
@@ -519,16 +582,19 @@ where
 /// Raft node
 type MemraftedNode<N, C> = Raft<SetKeyJsonBody, StorageResponse, Network<N>, RaftCache<C>>;
 
-
-
 pub struct RaftNode {
     id: NodeId,
     //thread: JoinHandle<()>
 }
 
 impl NetworkNode for RaftNode {
-    fn new(id: NodeId, req_channel: Receiver<NetworkRequest>, resp_channel: Sender<NetworkResponse>, net: Arc<Network<Self>>) -> Self {
-        let thread = std::thread::spawn(move || async {
+    fn new(
+        id: NodeId,
+        req_channel: Receiver<Arc<NetworkRequest>>,
+        resp_channel: Sender<Arc<NetworkResponse>>,
+        net: Arc<Network<Self>>,
+    ) -> Self {
+        let thread = tokio::spawn(async move {
             let config = Arc::new(
                 Config::build("primary-raft-group".into())
                     .validate()
@@ -536,46 +602,66 @@ impl NetworkNode for RaftNode {
             );
             let storage = Arc::new(RaftCache::<LocalCache>::new(id));
             let node = MemraftedNode::new(id, config, net, storage);
-
-            while let Ok(request) = req_channel.recv() {
-                match request {
+            
+            loop {
+                let request = req_channel.recv().await.unwrap();
+                match *request {
                     NetworkRequest::GetKey(query_params) => {
-                        let mut sm = storage.sm.blocking_write(); //.get(&query_params.key);
+                        let mut sm = storage.sm.blocking_write();
                         let res = sm.cache.get(&query_params.key);
                         info!("Getting key {} from node {}", query_params.key, id.clone());
-                        resp_channel.send(NetworkResponse::BaseResponse(res)).unwrap();                        
-                    },
+                        //let resp_unlocked = resp_channel.lock().unwrap();
+                        resp_channel
+                            .send(Arc::new(NetworkResponse::BaseResponse(res)))
+                            .await
+                            .unwrap();
+                    }
                     NetworkRequest::SetKey(json_body) => {
                         node.client_write(ClientWriteRequest::new(json_body));
                         info!("Setting key {} to node {}", json_body.key, id.clone());
-                        resp_channel.send(NetworkResponse::BaseResponse(None)).unwrap();
+                        //let resp_unlocked = resp_channel.lock().unwrap();
+                        resp_channel
+                            .send(Arc::new(NetworkResponse::BaseResponse(None)))
+                            .await
+                            .unwrap();
                     }
                     NetworkRequest::AppendEntries(rpc) => {
                         let res = node.append_entries(rpc).await.unwrap();
-                        resp_channel.send(NetworkResponse::AppendResponse(res)).unwrap();
-                    },
+                        //let resp_unlocked = resp_channel.lock().unwrap();
+                        resp_channel
+                            .send(Arc::new(NetworkResponse::AppendResponse(res)))
+                            .await
+                            .unwrap();
+                    }
                     NetworkRequest::InstallSnapshot(rpc) => {
                         let res = node.install_snapshot(rpc).await.unwrap();
-                        resp_channel.send(NetworkResponse::InstallResponse(res)).unwrap();
-                    },
+                        //let resp_unlocked = resp_channel.lock().unwrap();
+                        resp_channel
+                            .send(Arc::new(NetworkResponse::InstallResponse(res)))
+                            .await
+                            .unwrap();
+                    }
                     NetworkRequest::Vote(rpc) => {
                         let res = node.vote(rpc).await.unwrap();
-                        resp_channel.send(NetworkResponse::VoteResponse(res)).unwrap();
-                    },
+                        //let resp_unlocked = resp_channel.lock().unwrap();
+                        resp_channel
+                            .send(Arc::new(NetworkResponse::VoteResponse(res)))
+                            .await
+                            .unwrap();
+                    }
                 }
-            }
+            };
 
-            panic!("Panicked from node {}", id)
-        });      
+            //panic!("Panicked from node {}", id)
+        });
         RaftNode { id }
     }
 }
 
-
 pub struct RaftOrchestrator<N, C>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static
+    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     pub last_node: NodeId,
     pub raft_network: HashMap<NodeId, MemraftedNode<N, C>>,
@@ -586,10 +672,10 @@ where
     pub ring: BTreeMap<u64, NodeId>,
 }
 
-impl<N,C> RaftOrchestrator<N, C>
+impl<N, C> RaftOrchestrator<N, C>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static
+    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     /// Implementation of "Ketama Consistent Hashing".
     /// The server key is hashed, and inserted in the ring, possibly multiple times.
@@ -622,10 +708,10 @@ where
 }
 
 #[async_trait]
-impl<N, C> Cache for RaftOrchestrator<N, C> 
+impl<N, C> Cache for RaftOrchestrator<N, C>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static
+    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     fn new() -> Self {
         RaftOrchestrator {
@@ -649,8 +735,8 @@ where
                     return s;
                 }
                 None
-            },
-            None => None
+            }
+            None => None,
         }
     }
 
@@ -658,10 +744,16 @@ where
         let hashed_key = hash(key);
         let target = self.get_target_node(hashed_key);
         if let Some(t) = target {
-            let req = SetKeyJsonBody { key: key.clone(), value, expiration };
+            let req = SetKeyJsonBody {
+                key: key.clone(),
+                value,
+                expiration,
+            };
             let node = self.raft_network.get(&t).unwrap();
             let rpc = ClientWriteRequest::new(SetKeyJsonBody {
-                key: String::from(key), value, expiration
+                key: String::from(key),
+                value,
+                expiration,
             });
             let res = (*node).client_write(rpc).await;
             //self.network.send(t, NetworkRequest::SetKey(req));
@@ -669,10 +761,10 @@ where
     }
 }
 
-impl<N, C> Orchestrator for RaftOrchestrator<N, C> 
+impl<N, C> Orchestrator for RaftOrchestrator<N, C>
 where
     N: NetworkNode,
-    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static
+    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     ///Add a new cache to the pool
     fn add_cache(&mut self, name: String) {
@@ -697,5 +789,3 @@ where
         }
     }
 }
-
-

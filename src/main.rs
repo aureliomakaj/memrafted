@@ -5,8 +5,7 @@ mod hash;
 use actix_web::{web, App, HttpServer};
 use cache::local::LocalCache;
 use distribution::orchestrator::HashOrchestrator;
-use distribution::single_raft::{RaftOrchestrator, RaftNode};
-
+use distribution::single_raft::{RaftNode, RaftOrchestrator};
 
 use crate::distribution::server::{add_server, get_key, set_key, ServerState};
 

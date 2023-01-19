@@ -2,7 +2,7 @@ pub mod local;
 
 use std::time::Instant;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Type of the key in the cache
 pub type KeyType = String;

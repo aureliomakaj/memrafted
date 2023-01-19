@@ -25,7 +25,7 @@ where
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct GetKeyQueryParams {
     pub key: KeyType,
 }

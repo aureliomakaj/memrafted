@@ -1,8 +1,8 @@
 use std::{collections::HashMap, time::Instant};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use super::{Cache, KeyType, CachedInfo, ValueType};
+use super::{Cache, CachedInfo, KeyType, ValueType};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LocalCache {
