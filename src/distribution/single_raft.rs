@@ -7,7 +7,7 @@ use std::{
         //mpsc::{channel, Receiver, Sender},
         //mpsc::{channel, Receiver, Sender},
         Arc, //Mutex,
-    },
+    }, fmt::Display, time::Duration, thread::sleep,
     //thread::{sleep, JoinHandle},
     //time::Duration, 
 };
@@ -67,6 +67,24 @@ pub enum NetworkResponse {
     GetLeaderResponse(NodeId)
 }
 
+impl Display for NetworkResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkResponse::Ready => write!(f, "Ready"),
+            NetworkResponse::BaseResponse(s) => {
+                match s {
+                    Some(t) => write!(f, "BaseResponse({})", t),
+                    None => write!(f, "BaseResponse(None)")
+                }
+            },
+            NetworkResponse::AppendResponse(_) => write!(f, "AppendResponse()"),
+            NetworkResponse::InstallResponse(_) => write!(f, "InstallResponse()"),
+            NetworkResponse::VoteResponse(_) => write!(f, "VoteResponse()"),
+            NetworkResponse::GetLeaderResponse(l) => write!(f, "GetLeaderResponse({})", *l),
+        }
+    }
+}
+
 /// The response that the storage give back
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct StorageResponse(Option<String>);
@@ -84,7 +102,7 @@ where
     T: NetworkNode + Send + Sync + 'static,
 {
     pub nodes: Mutex<HashMap<NodeId, T>>,
-    pub channels: Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>,
+    pub channels: Arc<Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>>,
 }
 
 impl<T> Network<T>
@@ -94,7 +112,7 @@ where
     pub fn new() -> Network<T> {
         Network {
             nodes: Mutex::new(HashMap::new()),
-            channels: Mutex::new(HashMap::new()),
+            channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -102,9 +120,9 @@ where
     /// For each node we create two channels, one for sending a request and one for replying with a response
     pub async fn add_node(&mut self, id: NodeId, network: Arc<Mutex<Network<T>>>) {
         // Request channel
-        let (req_send, req_receive) = channel::<NetworkRequest>(1);
+        let (req_send, req_receive) = channel::<NetworkRequest>(10);
         // Response channel
-        let (resp_send, mut resp_receive) = channel::<NetworkResponse>(1);
+        let (resp_send, mut resp_receive) = channel::<NetworkResponse>(10);
         // Create a new reference of the network. This is needed because in this implementation we simulate 
         // a network, so each node must know how to reach other nodes, and this is done though the network
         let cloned_self = Arc::clone(&network);
@@ -127,7 +145,9 @@ where
 
     /// Send the given request to the given target
     pub async fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
-        let mut channel = self.channels.lock().await;
+        let mut channel = Arc::clone(&self.channels);
+        let mut channel = channel.lock().await;
+
         // Get the channel of the respective target
         let sender = channel.get_mut(&target);
         match sender {
@@ -141,7 +161,10 @@ where
                 // Wait for the response
                 let res = (*ch).1.recv().await;
                 match res {
-                    Some(s) => s,
+                    Some(s) => {
+                        info!("Got response {}", s);
+                        s
+                    },
                     None => panic!("No response")
                 }
             }
@@ -162,13 +185,13 @@ where
         rpc: AppendEntriesRequest<SetKeyJsonBody>,
     ) -> Result<AppendEntriesResponse> {
         
+        info!("*** APPEND ENTRIES");
         let res = self.lock().await.send(target, NetworkRequest::AppendEntries(rpc)).await;
-    
+        info!("*** RESPONSE ENTRIES");
         match res {
             NetworkResponse::AppendResponse(r) => Ok(r),
             _ => panic!("Expected AppendResponse")
         }
-        
     }
 
     async fn install_snapshot(
@@ -631,9 +654,9 @@ impl NetworkNode for RaftNode {
             // Build the components need for the RaftNode
             let config = Arc::new(
                 Config::build("primary-raft-group".into())
-                    .election_timeout_min(10 * 1000) // 10 secs
-                    .election_timeout_max(60 * 1000) // 60 secs
-                    .heartbeat_interval(1 * 1000)
+                    .election_timeout_min(50 * 1000) // 10 secs
+                    .election_timeout_max(500 * 1000) // 60 secs
+                    .heartbeat_interval(5 * 1000)
                     .validate()
                     .expect("failed to build Raft config"),
             );
@@ -645,15 +668,12 @@ impl NetworkNode for RaftNode {
             let net_clone = Arc::clone(&net);
 
             let node = MemraftedNode::new(id, config, net_clone, clone1);
-            
-            // let res = resp_channel.send(NetworkResponse::Ready);
-            // if let Err(e) = res {
-            //    info!("Errore {}", e.to_string());
-            // }
+
             resp_channel.send(NetworkResponse::Ready).await.unwrap();
-            // Wait of a request
             loop {
+                // Wait for a request
                 let request_listener = req_channel.recv().await;
+                info!("Node {} got request", id);
                 match request_listener {
                     //Err(err) => info!("Error in receiving request from node {} with err mex: {}", id, err.to_string()),
                     None => println!("Got nothing as await recv"),
@@ -684,31 +704,36 @@ impl NetworkNode for RaftNode {
                                 //         }else{
                                 //             info!("Qua");
                                             let res = node.client_write(ClientWriteRequest::new(json_body)).await;
-                                            if let Err(err) = res {
-                                                panic!("{}", err.to_string());
+                                            match res {
+                                                Ok(ok) => {
+                                                    info!("Got storage response {}", ok.index);
+                                                }
+                                                Err(err) => {
+                                                    panic!("{}", err.to_string());
+                                                }
                                             }
-                                            //let resp_unlocked = resp_channel.lock().unwrap();
+                                            info!("Sleep 5 seconds");
+                                            sleep(Duration::from_secs(5));
                                             resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
+                                            info!("Command sent back")
                                 //         }
                                 //     }
                                 // }
                             }
                             NetworkRequest::AppendEntries(rpc) => {
-                                //info!("Node {} received AppendEntries request", id);
+                                // info!("Node {} received AppendEntries request");
+
                                 let res = node.append_entries(rpc).await.unwrap();
-                                //let resp_unlocked = resp_channel.lock().unwrap();
                                 resp_channel.send(NetworkResponse::AppendResponse(res)).await.unwrap();
                             }
                             NetworkRequest::InstallSnapshot(rpc) => {
                                 //info!("Node {} received InstallSnapshot request", id);
                                 let res = node.install_snapshot(rpc).await.unwrap();
-                                //let resp_unlocked = resp_channel.lock().unwrap();
                                 resp_channel.send(NetworkResponse::InstallResponse(res)).await.unwrap();
                             }
                             NetworkRequest::Vote(rpc) => {
                                 //info!("Node {} received Vote request", id);
                                 let res = node.vote(rpc).await.unwrap();
-                                //let resp_unlocked = resp_channel.lock().unwrap();
                                 resp_channel.send(NetworkResponse::VoteResponse(res)).await.unwrap();
                             }
 
@@ -844,6 +869,7 @@ where
         for cache in cache_names {
             let node = self.add_raf_node(cache).await;
             ids.push(node);
+            sleep(Duration::from_secs(1));
         }
         info!("Initializing first cluster");
         self.network.lock().await.send(self.last_node, NetworkRequest::Initialize(ids)).await;
@@ -855,7 +881,6 @@ where
 impl<N> Cache for RaftOrchestrator<N>
 where
     N: NetworkNode,
-//    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     async fn new() -> Self {
         Self::new().await
@@ -891,11 +916,15 @@ where
             let leader_resp = self.network.lock().await.send(t, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
-                    self.network.lock().await.send(leader, NetworkRequest::SetKey(req)).await;
+                    info!("Sending command to leader..");
+                    let res = self.network.lock().await.send(leader, NetworkRequest::SetKey(req)).await;
+                    
+                    info!("Got response");
                 },
                 _ => panic!("Unexpected response")
             }
         }
+        ()
     }
 }
 
@@ -915,7 +944,9 @@ where
             let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
+                    info!("Sending add non voter request {}", std::thread::current().name().unwrap());
                     self.network.lock().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
+                    info!("Received add non voter request {}", std::thread::current().name().unwrap());
                 }
                 _ => panic!("Expected GetLeaderResponse")
             }
