@@ -2,11 +2,9 @@ mod cache;
 mod distribution;
 mod hash;
 
-use std::sync::Mutex;
-
 use actix_web::{web, App, HttpServer};
-use cache::local::LocalCache;
-use distribution::orchestrator::HashOrchestrator;
+//use cache::local::LocalCache;
+//use distribution::orchestrator::HashOrchestrator;
 use distribution::single_raft::{RaftNode, RaftOrchestrator};
 
 use crate::distribution::server::{add_server, get_key, set_key, ServerState};
