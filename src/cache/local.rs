@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Instant};
 
+use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{Cache, CachedInfo, KeyType, ValueType};
@@ -11,14 +12,15 @@ pub struct LocalCache {
 
 impl LocalCache {}
 
+#[async_trait]
 impl Cache for LocalCache {
-    fn new() -> Self {
+    async fn new() -> Self {
         Self {
             map: HashMap::new(),
         }
     }
 
-    fn get(&mut self, key: &KeyType) -> Option<ValueType> {
+    async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
         // Get the value from the hashmap
         let in_cache = self.map.get(key);
         match in_cache {
@@ -38,7 +40,7 @@ impl Cache for LocalCache {
         }
     }
 
-    fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
+    async fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
         self.map.insert(
             String::from(key),
             CachedInfo {

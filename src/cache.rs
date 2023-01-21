@@ -2,6 +2,7 @@ pub mod local;
 
 use std::time::Instant;
 
+use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Type of the key in the cache
@@ -23,15 +24,16 @@ pub struct CachedInfo {
     creation: Instant,
 }
 
-pub trait Cache {
+#[async_trait]
+pub trait Cache: Send + Sync {
     /// Creates new empty cache
-    fn new() -> Self;
+    async fn new() -> Self;
 
     /// Get the cached valued corresponding to key `k`, `None` if not present or expired
-    fn get(&mut self, k: &KeyType) -> Option<ValueType>;
+    async fn get(&mut self, k: &KeyType) -> Option<ValueType>;
 
     /// Set the value `v` in the cache for key `k` and stores it for `duration` seconds
-    fn set(&mut self, k: &KeyType, v: ValueType, duration: u64);
+    async fn set(&mut self, k: &KeyType, v: ValueType, duration: u64);
 
     /// Remove the cached calue corresponding to key `k`
     // fn drop(&mut self, k: &CacheKeyType);

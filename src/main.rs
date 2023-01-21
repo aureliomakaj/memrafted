@@ -19,7 +19,7 @@ async fn main() -> std::io::Result<()> {
     println!("Starting server...");
     println!("Server ready. Listening on 127.0.0.1:8081"); 
 
-    let appstate = web::Data::new(ServerState::<RaftOrchestrator<RaftNode>>::new());
+    let appstate = web::Data::new(ServerState::<RaftOrchestrator<RaftNode>>::new().await);
     
     HttpServer::new(move || {
         App::new()

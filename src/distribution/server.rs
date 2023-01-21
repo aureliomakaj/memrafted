@@ -18,9 +18,9 @@ impl<T> ServerState<T>
 where
     T: Cache,
 {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         Self {
-            inner_cache: T::new().into(),
+            inner_cache: T::new().await.into(),
         }
     }
 }
@@ -51,7 +51,7 @@ where
     T: Cache,
 {
     let mut inner = data.inner_cache.lock().unwrap();
-    let res_opt = inner.get(&query_params.key);
+    let res_opt = inner.get(&query_params.key).await;
     Ok(web::Json(res_opt))
 }
 
@@ -64,7 +64,7 @@ where
     T: Cache,
 {
     let mut inner = data.inner_cache.lock().unwrap();
-    inner.set(&json_req.key, json_req.value.clone(), json_req.expiration);
+    inner.set(&json_req.key, json_req.value.clone(), json_req.expiration).await;
     Ok("Ok")
 }
 
@@ -77,7 +77,7 @@ where
     T: Orchestrator,
 {
     let mut inner = data.inner_cache.lock().unwrap();
-    inner.add_cache(json_req.name.clone());
+    inner.add_cache(json_req.name.clone()).await;
     Ok("Ok")
 }
 

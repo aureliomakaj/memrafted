@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use async_raft::async_trait::async_trait;
 use log::info;
 
 use crate::{
@@ -57,18 +58,19 @@ where
     }
 }
 
+#[async_trait]
 impl<T> Cache for HashOrchestrator<T>
 where
     T: Cache + Clone,
 {
-    fn new() -> Self {
+    async fn new() -> Self {
         HashOrchestrator {
             ring: BTreeMap::new(),
             cache_map: HashMap::new(),
         }
     }
 
-    fn get(&mut self, key: &KeyType) -> Option<ValueType> {
+    async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
         let hashed_key = hash(key);
         let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -80,7 +82,7 @@ where
 
                 // If the instance exists, try gettin the value
                 if let Some(cache) = cache_opt {
-                    cache.get(key)
+                    cache.get(key).await
                 } else {
                     None
                 }
@@ -89,7 +91,7 @@ where
         }
     }
 
-    fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
+    async fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
         let hashed_key = hash(key);
         let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -99,7 +101,7 @@ where
                 info!("Saving {} to server with key {}", hashed_key, index);
                 let cache_opt = self.cache_map.get_mut(index);
                 if let Some(cache) = cache_opt {
-                    cache.set(key, value, expiration)
+                    cache.set(key, value, expiration).await
                 }
             }
             None => (),
@@ -107,12 +109,13 @@ where
     }
 }
 
+#[async_trait]
 impl<T> Orchestrator for HashOrchestrator<T>
 where
     T: Cache + Clone,
 {
     ///Add a new cache to the pool
-    fn add_cache(&mut self, name: String) {
+    async fn add_cache(&mut self, name: String) {
         let mut keys = vec![];
         for i in 0..100 {
             keys.push(format!("{}_{}", name, i));
@@ -126,7 +129,7 @@ where
             cloned, cache_hash
         );
         // Create a new memrafted instace and map it to the server name
-        self.cache_map.insert(name, T::new());
+        self.cache_map.insert(name, T::new().await);
         for key in keys {
             self.ring.insert(hash(&key), cloned.clone());
         }
