@@ -2,6 +2,8 @@ mod cache;
 mod distribution;
 mod hash;
 
+use std::sync::Mutex;
+
 use actix_web::{web, App, HttpServer};
 use cache::local::LocalCache;
 use distribution::orchestrator::HashOrchestrator;
@@ -18,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     println!("Server ready. Listening on 127.0.0.1:8081"); 
 
     let appstate = web::Data::new(ServerState::<RaftOrchestrator<RaftNode>>::new());
-
+    
     HttpServer::new(move || {
         App::new()
             .app_data(appstate.clone())

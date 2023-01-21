@@ -57,6 +57,7 @@ pub enum NetworkRequest {
 #[derive(Debug)]
 /// Responses returned by a thread
 pub enum NetworkResponse {
+    Ready,
     BaseResponse(Option<String>),
     /// The following variants are for Raft
     AppendResponse(AppendEntriesResponse),
@@ -101,11 +102,35 @@ where
         let (resp_send, resp_receive) = channel::<NetworkResponse>();
         let cloned_self = Arc::clone(&network);
         let node = NetworkNode::new(id, req_receive, resp_send,cloned_self);
-        self.nodes.lock().unwrap().insert(id, node);
-        self.channels
-            .lock()
-            .unwrap()
-            .insert(id, (req_send, resp_receive));
+        sleep(Duration::from_secs(2));
+        // info!("Waiting for ready status");
+        // let res = resp_receive.recv();
+        // info!("Got result");
+        // while let Err(err) = res {
+        //     println!("{}", err.to_string());
+        // }
+        // match res.unwrap() {
+        //    NetworkResponse::Ready => {
+                self.nodes.lock().unwrap().insert(id, node);
+                self.channels
+                    .lock()
+                    .unwrap()
+                    .insert(id, (req_send, resp_receive));
+    //        },
+    //        _ => panic!("Unexpected response on node initializaiton")
+    //    };
+    //     let res = resp_receive.recv().unwrap();
+    //     info!("Got result");
+    //     match res {
+    //        NetworkResponse::Ready => {
+    //             self.nodes.lock().unwrap().insert(id, node);
+    //             self.channels
+    //                 .lock()
+    //                 .unwrap()
+    //                 .insert(id, (req_send, resp_receive));
+    //        },
+    //        _ => panic!("Unexpected response on node initializaiton")
+    //    };
     }
 
     pub fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
@@ -598,7 +623,8 @@ impl NetworkNode for RaftNode {
         resp_channel: Sender<NetworkResponse>,
         net: Arc<Mutex<Network<Self>>>,
     ) -> Self {
-        let thread = tokio::spawn(async move {
+        tokio::spawn(async move {
+            info!("Creating node");
             
             // Build the components need for the RaftNode
             let config = Arc::new(
@@ -614,23 +640,16 @@ impl NetworkNode for RaftNode {
             let net_clone = Arc::clone(&net);
 
             let node = MemraftedNode::new(id, config, net_clone, clone1);
-            /*// Collect the NodeIds in the network until now, and add the current one
-            let mut hash_set = HashSet::new();
-            hash_set.insert(id.clone());
-            for (k, _) in net_clone.lock().unwrap().nodes.lock().unwrap().iter() {
-                println!("Adding node {} to the HashSet", k);
-                hash_set.insert(k.clone());
-            }
             
-            let node = MemraftedNode::new(id, config, net_clone, clone1);
-            let add = node.initialize(hash_set).await;
-            if let Err(err) = add {
-                info!("Got error while initializing node. Err mex: '{}'", err.to_string());
-            }*/
-            info!("Starting loop of node {}", id);
+            // let res = resp_channel.send(NetworkResponse::Ready);
+            // if let Err(e) = res {
+            //    info!("Errore {}", e.to_string());
+            // }
+            
+            // Wait of a request
             loop {
-                // Wait of a request
                 let request_listener = req_channel.recv();
+                info!("Received something");
                 match request_listener {
                     Err(err) => info!("Error in receiving request from node {} with err mex: {}", id, err.to_string()),
                     Ok(request) => 
@@ -683,18 +702,6 @@ impl NetworkNode for RaftNode {
                                 //let resp_unlocked = resp_channel.lock().unwrap();
                                 resp_channel.send(NetworkResponse::VoteResponse(res)).unwrap();
                             }
-                            // NetworkRequest::Initialize => {
-                            //     let mut hash_set = HashSet::new();
-                            //     hash_set.insert(id.clone());
-                            //     for (k, _) in Arc::clone(&net).lock().unwrap().nodes.lock().unwrap().iter() {
-                            //         println!("Adding node {} to the HashSet", k);
-                            //         hash_set.insert(k.clone());
-                            //     }
-                            //     let init_res = node.initialize(hash_set).await;
-                            //     if let Err(err) = init_res {
-                            //         info!("Got error while initializing node. Err mex: '{}'", err.to_string());
-                            //     }
-                            // }
 
                             NetworkRequest::Initialize(ids) => {
                                 info!("Node {} received Initialize request with the following ids:", id);
@@ -723,8 +730,7 @@ impl NetworkNode for RaftNode {
                             }
                         }
                 }
-            };
-
+            }
             //panic!("Panicked from node {}", id)
         });
         RaftNode { id }
@@ -750,6 +756,19 @@ where
     N: NetworkNode,
     //C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
+    
+    pub fn new() -> Self {
+        let orc = RaftOrchestrator {
+            last_node: 0,
+            network: Arc::new(Mutex::new(Network::new())),
+            nodes: HashMap::new(),
+            ring: BTreeMap::new(),
+        };
+        
+        //orc.add_raf_node(String::from("tmp"));
+        //orc.add_raf_node(String::from("tmp2"));
+        orc
+    }
     /// Implementation of "Ketama Consistent Hashing".
     /// The server key is hashed, and inserted in the ring, possibly multiple times.
     /// When we want to cache a key, we hash the key, and find in the ring the first
@@ -779,12 +798,12 @@ where
         None
     }
 
-    fn add_raf_node(&mut self, name: String) -> NodeId {
+    pub fn add_raf_node(&mut self, name: String) -> NodeId {
         let node_id = self.last_node + 1;
         info!("Adding a new cache with ID: {}", node_id);
         self.network.lock().unwrap().add_node(node_id, Arc::clone(&self.network));
+        info!("Inserted");
         self.nodes.insert(name.clone(), node_id);
-    
         let mut keys = vec![];
         for i in 0..100 {
             keys.push(format!("{}_{}", name, i));
@@ -805,13 +824,15 @@ where
         node_id.clone()
     }
 
-    fn add_initial_caches(&mut self, cache_names: Vec<String>) {
+    pub fn add_initial_caches(&mut self, cache_names: Vec<String>) {
         let mut ids = vec![];
         for cache in cache_names {
             let node = self.add_raf_node(cache);
             ids.push(node);
         }
-        self.network.lock().unwrap().send(self.last_node, NetworkRequest::Initialize(ids));
+        info!("Initializing first cluster");
+        //self.network.lock().unwrap().send(self.last_node, NetworkRequest::Initialize(ids));
+        info!("Initialized");
     }
 }
 
@@ -821,19 +842,7 @@ where
 //    C: Cache + Sync + Send + Serialize + Deserialize<'static> + 'static,
 {
     fn new() -> Self {
-        let mut self_inst = RaftOrchestrator {
-            last_node: 0,
-            network: Arc::new(Mutex::new(Network::new())),
-            nodes: HashMap::new(),
-            ring: BTreeMap::new(),
-        };
-
-        let server1 = String::from("server1");
-        let server2 = String::from("server2");
-        let server3 = String::from("server3");
-        self_inst.add_initial_caches(vec![server1, server2, server3]);
-        self_inst
-        
+        Self::new()
     }
 
     fn get(&mut self, key: &KeyType) -> Option<ValueType> {
@@ -873,7 +882,21 @@ where
 {
     ///Add a new cache to the pool
     fn add_cache(&mut self, name: String) {
+        let node = self.add_raf_node(name);
        
+        let members = self.nodes.keys().len();
+        let net = self.network.lock().unwrap();
+        if members > 1 {
+            let leader_resp = net.send(1, NetworkRequest::GetLeader);
+            match leader_resp {
+                NetworkResponse::GetLeaderResponse(leader) => {
+                    self.network.lock().unwrap().send(leader, NetworkRequest::AddNonVoter(node));
+                }
+                _ => panic!("Expected GetLeaderResponse")
+            }
+        }else {
+            net.send(node, NetworkRequest::Initialize(vec![node]));
+        }
 /* 
         info!("Getting the leader...");
         let res = self.network.lock().unwrap().send(node_id, NetworkRequest::GetLeader);
