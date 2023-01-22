@@ -102,7 +102,7 @@ where
     T: NetworkNode + Send + Sync + 'static,
 {
     pub nodes: Mutex<HashMap<NodeId, T>>,
-    pub channels: Arc<Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>>,
+    pub channels: Mutex<HashMap<NodeId, (Sender<NetworkRequest>, Receiver<NetworkResponse>)>>,
 }
 
 impl<T> Network<T>
@@ -112,7 +112,7 @@ where
     pub fn new() -> Network<T> {
         Network {
             nodes: Mutex::new(HashMap::new()),
-            channels: Arc::new(Mutex::new(HashMap::new())),
+            channels: Mutex::new(HashMap::new()),
         }
     }
 
@@ -145,11 +145,10 @@ where
 
     /// Send the given request to the given target
     pub async fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
-        let mut channel = Arc::clone(&self.channels);
-        let mut channel = channel.lock().await;
+        let mut channels = self.channels.lock().await;
 
         // Get the channel of the respective target
-        let sender = channel.get_mut(&target);
+        let sender = channels.get_mut(&target);
         match sender {
             Some(ch) => {
                 // Send the request
@@ -185,9 +184,11 @@ where
         rpc: AppendEntriesRequest<SetKeyJsonBody>,
     ) -> Result<AppendEntriesResponse> {
         
-        info!("*** APPEND ENTRIES");
-        let res = self.lock().await.send(target, NetworkRequest::AppendEntries(rpc)).await;
-        info!("*** RESPONSE ENTRIES");
+        info!("APPEND_ENTRIES: Waiting network lock. . .");
+        let unlocked = self.lock().await;
+        info!("APPEND_ENTRIES: Got lock. Sending. . .");
+        let res = unlocked.send(target, NetworkRequest::AppendEntries(rpc)).await;
+        info!("APPEND_ENTRIES: Sent and got response");
         match res {
             NetworkResponse::AppendResponse(r) => Ok(r),
             _ => panic!("Expected AppendResponse")
@@ -703,6 +704,8 @@ impl NetworkNode for RaftNode {
                                 //             //error!("Not the leader")
                                 //         }else{
                                 //             info!("Qua");
+                                            resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
+                                            info!("Command sent back");
                                             let res = node.client_write(ClientWriteRequest::new(json_body)).await;
                                             match res {
                                                 Ok(ok) => {
@@ -712,10 +715,6 @@ impl NetworkNode for RaftNode {
                                                     panic!("{}", err.to_string());
                                                 }
                                             }
-                                            info!("Sleep 5 seconds");
-                                            sleep(Duration::from_secs(5));
-                                            resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
-                                            info!("Command sent back")
                                 //         }
                                 //     }
                                 // }
@@ -916,8 +915,10 @@ where
             let leader_resp = self.network.lock().await.send(t, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
-                    info!("Sending command to leader..");
-                    let res = self.network.lock().await.send(leader, NetworkRequest::SetKey(req)).await;
+                    info!("Waiting for lock...");
+                    let unlocked = self.network.lock().await;
+                    info!("Got lock. Sending command to leader..");
+                    let res = unlocked.send(leader, NetworkRequest::SetKey(req)).await;
                     
                     info!("Got response");
                 },
@@ -944,15 +945,12 @@ where
             let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
-                    info!("Sending add non voter request {}", std::thread::current().name().unwrap());
                     self.network.lock().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
-                    info!("Received add non voter request {}", std::thread::current().name().unwrap());
                 }
                 _ => panic!("Expected GetLeaderResponse")
             }
         }else {
             net.send(node, NetworkRequest::Initialize(vec![node])).await;
         }
-
     }
 }
