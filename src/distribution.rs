@@ -9,4 +9,5 @@ pub mod single_raft;
 #[async_trait]
 pub trait Orchestrator: Cache {
     async fn add_cache(&mut self, name: String);
+    async fn remove_cache(&mut self, name: String);
 }

@@ -135,4 +135,8 @@ where
         }
         // Map the hash of the server name to the server name
     }
+
+    async fn remove_cache(&mut self, name: String) {
+        todo!()
+    }
 }

@@ -7,11 +7,12 @@ use actix_web::{web, App, HttpServer};
 //use distribution::orchestrator::HashOrchestrator;
 use distribution::single_raft::{RaftNode, RaftOrchestrator};
 
-use crate::distribution::server::{add_server, get_key, set_key, ServerState};
+use crate::distribution::server::{remove_server, add_server, get_key, set_key, ServerState};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "debug");
+    std::env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
 
     println!("Starting server...");
@@ -33,6 +34,10 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/add-cache",
                 web::post().to(add_server::<RaftOrchestrator<RaftNode>>),
+            )
+            .route(
+                "/remove-cache",
+                web::post().to(remove_server::<RaftOrchestrator<RaftNode>>),
             )
         // .route("print-internally", web::get().to(print_internally<HashOrchestrator<LocalCache>>))
     })

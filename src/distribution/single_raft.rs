@@ -51,7 +51,8 @@ pub enum NetworkRequest {
     Vote(VoteRequest),
     AddNonVoter(NodeId),
     GetLeader,
-    Initialize(Vec<NodeId>)
+    Initialize(Vec<NodeId>),
+    ChangeMembership(Vec<NodeId>)
 }
 
 #[derive(Debug)]
@@ -131,14 +132,14 @@ where
         let res = resp_receive.recv().await.unwrap();
         info!("Node ready to accept requests");
         match res {
-           NetworkResponse::Ready => {
-                self.nodes.lock().await.insert(id, node);
-                self.channels
-                    .lock()
-                    .await
-                    .insert(id, (req_send, resp_receive));
-           },
-           _ => panic!("Unexpected response at node initialization")
+            NetworkResponse::Ready => {
+                    self.nodes.lock().await.insert(id, node);
+                    self.channels
+                        .lock()
+                        .await
+                        .insert(id, (req_send, resp_receive));
+            },
+            _ => panic!("Unexpected response at node initialization")
        };
     
     }
@@ -655,8 +656,8 @@ impl NetworkNode for RaftNode {
             // Build the components need for the RaftNode
             let config = Arc::new(
                 Config::build("primary-raft-group".into())
-                    .election_timeout_min(50 * 1000) // 10 secs
-                    .election_timeout_max(500 * 1000) // 60 secs
+                    .election_timeout_min(20 * 1000) // 10 secs
+                    .election_timeout_max(50 * 1000) // 60 secs
                     .heartbeat_interval(5 * 1000)
                     .validate()
                     .expect("failed to build Raft config"),
@@ -691,33 +692,21 @@ impl NetworkNode for RaftNode {
                             }
                             NetworkRequest::SetKey(json_body) => {
                                 info!("Node {} received SetKey({}) request", id, json_body.key);
-                                // //resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
-                                // let curr_leader = node.current_leader().await;
-                                // info!("Setting key {} to node {}", json_body.key, id.clone());
-                                // match curr_leader {
-                                //     None => panic!("No current leader"),
-                                //     Some(leader_id) => {
-                                //         if leader_id != id {
-                                //         let res = net.lock().await.send(leader_id, NetworkRequest::SetKey(json_body)).await;
-                                //         info!("Responding");
-                                //         resp_channel.send(res).await.unwrap();
-                                //             //error!("Not the leader")
-                                //         }else{
-                                //             info!("Qua");
-                                            resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
-                                            info!("Command sent back");
-                                            let res = node.client_write(ClientWriteRequest::new(json_body)).await;
-                                            match res {
-                                                Ok(ok) => {
-                                                    info!("Got storage response {}", ok.index);
-                                                }
-                                                Err(err) => {
-                                                    panic!("{}", err.to_string());
-                                                }
-                                            }
-                                //         }
-                                //     }
-                                // }
+                                // Soluzione temporanea: ritornando subito il valore, si libera il lock della network.
+                                // Se messo dopo il client_write, il thread si blocca in quanto quando la 
+                                // chiamata append_entries viene chiamata cerca di prendere possesso della network dentro al mutex,
+                                // che però è già bloccato.
+                                resp_channel.send(NetworkResponse::BaseResponse(None)).await.unwrap();
+                                info!("Command sent back");
+                                let res = node.client_write(ClientWriteRequest::new(json_body)).await;
+                                match res {
+                                    Ok(ok) => {
+                                        info!("Got storage response {}", ok.index);
+                                    }
+                                    Err(err) => {
+                                        panic!("{}", err.to_string());
+                                    }
+                                }
                             }
                             NetworkRequest::AppendEntries(rpc) => {
                                 // info!("Node {} received AppendEntries request");
@@ -752,6 +741,7 @@ impl NetworkNode for RaftNode {
                             }
                             NetworkRequest::AddNonVoter(node_id) => {
                                 info!("Node {} received AddNonVoter({}) request", id, node_id);
+                                resp_channel.send(NetworkResponse::Ready).await.unwrap();
                                 let add_res = node.add_non_voter(node_id).await;
                                 if let Err(err) = add_res {
                                     panic!("Err adding non voter {} at node {}. Err mex: {}", node_id, id, err.to_string());
@@ -761,6 +751,20 @@ impl NetworkNode for RaftNode {
                                 info!("Node {} received GetLeader request", id);
                                 let current_leader = node.current_leader().await.unwrap();
                                 resp_channel.send(NetworkResponse::GetLeaderResponse(current_leader)).await.unwrap();
+                            }
+                            NetworkRequest::ChangeMembership(ids) => {
+                                info!("Node {} received Initialize request with the following ids:", id);
+                                resp_channel.send(NetworkResponse::Ready).await.unwrap();
+                                let mut hash_set = HashSet::new();
+                                for id_member in ids.iter() {
+                                    info!("- {}", id_member);
+                                    hash_set.insert(*id_member);
+                                }
+                                let res = node.change_membership(hash_set).await;
+                                match res {
+                                    Err(err) => panic!("Err while changing membership. Err mex: {}", err.to_string()),
+                                    Ok(_) => ()
+                                };
                             }
                         }
                 }
@@ -862,6 +866,23 @@ where
         node_id.clone()
     }
 
+    pub async fn remove_raft_node(&mut self, name: String) {
+        let node_id_get = self.nodes.get(&name);
+        if let Some(node_id) = node_id_get {
+            info!("Removing raft node with ID: {}", node_id);
+            let mut keys = vec![];
+            for i in 0..100 {
+                keys.push(format!("{}_{}", name, i));
+            }
+    
+            for key in keys {
+                self.ring.remove(&hash(&key));
+            }
+            self.nodes.remove(&name);
+            
+        }
+    }
+
     /// Add initial caches and initialize them in a single raft cluster
     pub async fn add_initial_caches(&mut self, cache_names: Vec<String>) {
         let mut ids = vec![];
@@ -941,16 +962,32 @@ where
        
         let members = self.nodes.keys().len();
         let net = self.network.lock().await;
-        if members > 1 {
+        let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
+        match leader_resp {
+            NetworkResponse::GetLeaderResponse(leader) => {
+                self.network.lock().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
+            }
+            _ => panic!("Expected GetLeaderResponse")
+        }
+    }
+
+    async fn remove_cache(&mut self, name: String) {
+        let cloned = self.nodes.clone();
+        let node_id_get = cloned.get(&name);
+        if let Some(node_id) = node_id_get {
+            self.remove_raft_node(name).await;
+            let net = self.network.lock().await;
             let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
-                    self.network.lock().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
+                    let mut new_members = vec![];
+                    for n in self.nodes.values().filter(|elem| **elem != *node_id) {
+                        new_members.push(*n);
+                    }
+                    net.send(leader, NetworkRequest::ChangeMembership(new_members)).await;
                 }
                 _ => panic!("Expected GetLeaderResponse")
             }
-        }else {
-            net.send(node, NetworkRequest::Initialize(vec![node])).await;
         }
     }
 }

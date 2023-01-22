@@ -81,6 +81,18 @@ where
     Ok("Ok")
 }
 
+pub async fn remove_server<T>(
+    data: web::Data<ServerState<T>>,
+    json_req: web::Json<AddServerJsonBody>,
+) -> Result<impl Responder>
+where
+    T: Orchestrator,
+{
+    let mut inner = data.inner_cache.lock().unwrap();
+    inner.remove_cache(json_req.name.clone()).await;
+    Ok("Ok")
+}
+
 // // #[get("/print-internally")]
 // pub async fn print_internally<T>(data: web::Data<ServerState<T>>) -> Result<impl Responder>
 // where
