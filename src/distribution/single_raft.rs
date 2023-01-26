@@ -7,7 +7,7 @@ use std::{
         //mpsc::{channel, Receiver, Sender},
         //mpsc::{channel, Receiver, Sender},
         Arc, //Mutex,
-    }, fmt::Display, time::Duration, thread::sleep, ops::{DerefMut, Deref},
+    }, fmt::Display, time::Duration, thread::sleep, ops::{DerefMut, Deref}, process::exit,
     //thread::{sleep, JoinHandle},
     //time::Duration, 
 };
@@ -45,6 +45,7 @@ use super::{
 pub enum NetworkRequest {
     GetKey(GetKeyQueryParams),
     SetKey(SetKeyJsonBody),
+    Stop,
     /// The following variants are for Raft
     AppendEntries(AppendEntriesRequest<SetKeyJsonBody>),
     InstallSnapshot(InstallSnapshotRequest),
@@ -52,7 +53,7 @@ pub enum NetworkRequest {
     AddNonVoter(NodeId),
     GetLeader,
     Initialize(Vec<NodeId>),
-    ChangeMembership(Vec<NodeId>)
+    ChangeMembership(Vec<NodeId>),
 }
 
 #[derive(Debug)]
@@ -144,6 +145,12 @@ where
     
     }
 
+    pub async fn remove_node(&mut self, id: NodeId) {
+        self.send(id, NetworkRequest::Stop).await;
+        self.nodes.write().await.remove(&id);
+        self.channels.write().await.remove(&id);
+    }
+
     /// Send the given request to the given target
     pub async fn send(&self, target: NodeId, req: NetworkRequest) -> NetworkResponse {
         let channels = self.channels.read().await;
@@ -160,10 +167,7 @@ where
                 // Wait for the response
                 let res = (*ch).1.recv().await;
                 match res {
-                    Ok(s) => {
-                        info!("Got response {}", s);
-                        s
-                    },
+                    Ok(s) => s,
                     Err(_) => panic!("No response")
                 }
             }
@@ -675,7 +679,6 @@ impl NetworkNode for RaftNode {
                 debug!("{:?}", metrics);
                 // Wait for a request
                 let request_listener = req_channel.recv().await;
-                info!("Node {} got request", id);
                 match request_listener {
                     Err(e) => println!("Error while receiving: {}", e.to_string()),
                     Ok(request) => 
@@ -752,6 +755,11 @@ impl NetworkNode for RaftNode {
                                     Ok(_) => ()
                                 };
                                 resp_channel.send(NetworkResponse::Ready).await.unwrap();
+                            }
+                            NetworkRequest::Stop => {
+                                req_channel.close();
+                                resp_channel.close();
+                                break;
                             }
                         }
                 }
@@ -865,7 +873,6 @@ where
                 self.ring.remove(&hash(&key));
             }
             self.nodes.remove(&name);
-            
         }
     }
 
@@ -956,15 +963,18 @@ where
         let node_id_get = cloned.get(&name);
         if let Some(node_id) = node_id_get {
             self.remove_raft_node(name).await;
-            let net = self.network.read().await;
-            let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
+            //let net = ;
+            let leader_resp = self.network.read().await.send(1, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
                     let mut new_members = vec![];
                     for n in self.nodes.values().filter(|elem| **elem != *node_id) {
                         new_members.push(*n);
                     }
-                    net.send(leader, NetworkRequest::ChangeMembership(new_members)).await;
+                    self.network.read().await.send(leader, NetworkRequest::ChangeMembership(new_members)).await;
+                    info!("Removing. . .");
+                    self.network.write().await.remove_node(*node_id).await;
+                    info!("Removed!");
                 }
                 _ => panic!("Expected GetLeaderResponse")
             }
