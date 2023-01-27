@@ -3,13 +3,7 @@ use std::{
     
     collections::{BTreeMap, HashMap, HashSet},
     //hash::Hash,
-    sync::{
-        //mpsc::{channel, Receiver, Sender},
-        //mpsc::{channel, Receiver, Sender},
-        Arc, //Mutex,
-    }, fmt::Display, time::Duration, thread::sleep, ops::{DerefMut, Deref}, process::exit,
-    //thread::{sleep, JoinHandle},
-    //time::Duration, 
+    sync::Arc, fmt::Display, time::Duration, thread::sleep 
 };
 
 use anyhow::Result;
@@ -146,9 +140,9 @@ where
     }
 
     pub async fn remove_node(&mut self, id: NodeId) {
-        self.send(id, NetworkRequest::Stop).await;
-        self.nodes.write().await.remove(&id);
-        self.channels.write().await.remove(&id);
+        // self.send(id, NetworkRequest::Stop).await;
+        // self.nodes.write().await.remove(&id);
+        // self.channels.write().await.remove(&id);
     }
 
     /// Send the given request to the given target
@@ -757,9 +751,9 @@ impl NetworkNode for RaftNode {
                                 resp_channel.send(NetworkResponse::Ready).await.unwrap();
                             }
                             NetworkRequest::Stop => {
-                                req_channel.close();
-                                resp_channel.close();
-                                break;
+                                // req_channel.close();
+                                // resp_channel.close();
+                                // break;
                             }
                         }
                 }
@@ -885,7 +879,7 @@ where
             sleep(Duration::from_secs(1));
         }
         info!("Initializing first cluster");
-        self.network.write().await.send(self.last_node, NetworkRequest::Initialize(ids)).await;
+        self.network.read().await.send(self.last_node, NetworkRequest::Initialize(ids)).await;
         info!("Initialized");
     }
 }
@@ -949,12 +943,25 @@ where
         let node = self.add_raf_node(name).await;
        
         let net = self.network.read().await;
-        let leader_resp = net.send(1, NetworkRequest::GetLeader).await;
-        match leader_resp {
-            NetworkResponse::GetLeaderResponse(leader) => {
-                self.network.read().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
-            }
-            _ => panic!("Expected GetLeaderResponse")
+        let node_id_opt = self.nodes.values().min();
+        match node_id_opt {
+            Some(node_id) => {
+                let leader_resp = net.send(*node_id, NetworkRequest::GetLeader).await;
+                match leader_resp {
+                    NetworkResponse::GetLeaderResponse(leader) => {
+                        self.network.read().await.send(leader, NetworkRequest::AddNonVoter(node)).await;
+        
+                        let mut new_membership = vec![];
+                        for (_, v) in self.nodes.iter() {
+                            new_membership.push(v.clone());
+                        }
+                        self.network.read().await.send(leader, NetworkRequest::ChangeMembership(new_membership)).await;
+        
+                    }
+                    _ => panic!("Expected GetLeaderResponse")
+                }
+            },
+            None => panic!("Expected at least a node")
         }
     }
 
@@ -962,19 +969,15 @@ where
         let cloned = self.nodes.clone();
         let node_id_get = cloned.get(&name);
         if let Some(node_id) = node_id_get {
+            let leader_resp = self.network.read().await.send(*node_id, NetworkRequest::GetLeader).await;
             self.remove_raft_node(name).await;
-            //let net = ;
-            let leader_resp = self.network.read().await.send(1, NetworkRequest::GetLeader).await;
             match leader_resp {
                 NetworkResponse::GetLeaderResponse(leader) => {
                     let mut new_members = vec![];
-                    for n in self.nodes.values().filter(|elem| **elem != *node_id) {
+                    for n in self.nodes.values() {
                         new_members.push(*n);
                     }
                     self.network.read().await.send(leader, NetworkRequest::ChangeMembership(new_members)).await;
-                    info!("Removing. . .");
-                    self.network.write().await.remove_node(*node_id).await;
-                    info!("Removed!");
                 }
                 _ => panic!("Expected GetLeaderResponse")
             }
