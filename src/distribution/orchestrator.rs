@@ -107,6 +107,10 @@ where
             None => (),
         }
     }
+
+    fn print_internally(&self) {
+        println!("Nothing to print.")
+    }
 }
 
 #[async_trait]
@@ -120,23 +124,23 @@ where
         for i in 0..100 {
             keys.push(format!("{}_{}", name, i));
         }
-        // Compute the hash of the server name
-        let cache_hash = hash(&name);
-        let cloned = name.clone();
 
-        info!(
-            "Adding server {} with hashed <T> where T: Cachekey {}",
-            cloned, cache_hash
-        );
+        let cloned = name.clone();
         // Create a new memrafted instace and map it to the server name
         self.cache_map.insert(name, T::new().await);
         for key in keys {
             self.ring.insert(hash(&key), cloned.clone());
         }
-        // Map the hash of the server name to the server name
     }
 
     async fn remove_cache(&mut self, name: String) {
-        todo!()
+        let mut keys = vec![];
+        for i in 0..100 {
+            keys.push(format!("{}_{}", name, i));
+        }
+        self.cache_map.remove(&name);
+        for key in keys {
+            self.ring.remove(&hash(&key));
+        }
     }
 }

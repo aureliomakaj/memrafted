@@ -85,6 +85,27 @@ impl Display for NetworkResponse {
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct StorageResponse(Option<String>);
 
+impl AppData for SetKeyJsonBody {}
+impl AppDataResponse for StorageResponse {}
+
+/// Error used to trigger Raft shutdown from storage.
+#[derive(Clone, Debug, Error)]
+pub enum ShutdownError {
+    #[error("unsafe storage error")]
+    UnsafeStorageError,
+}
+
+pub trait NetworkNode: Send + Sync + 'static {
+    fn new(
+        id: NodeId,
+        req_channel: Receiver<NetworkRequest>,
+        resp_channel: Sender<NetworkResponse>,
+        net: Arc<RwLock<Network<Self>>>
+    ) -> Self
+    where
+        Self: Sized;
+}
+
 /// Simulation of a network of cache servers.
 /// Each node is a thead and is mapped to an identifier.
 /// The communication happens using two channels, one for the request and one for the response.
@@ -212,26 +233,8 @@ where
     }
 }
 
-pub trait NetworkNode: Send + Sync + 'static {
-    fn new(
-        id: NodeId,
-        req_channel: Receiver<NetworkRequest>,
-        resp_channel: Sender<NetworkResponse>,
-        net: Arc<RwLock<Network<Self>>>
-    ) -> Self
-    where
-        Self: Sized;
-}
 
-impl AppData for SetKeyJsonBody {}
-impl AppDataResponse for StorageResponse {}
 
-/// Error used to trigger Raft shutdown from storage.
-#[derive(Clone, Debug, Error)]
-pub enum ShutdownError {
-    #[error("unsafe storage error")]
-    UnsafeStorageError,
-}
 
 /// The application snapshot type
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -650,8 +653,8 @@ impl NetworkNode for RaftNode {
             // Build the components need for the RaftNode
             let config = Arc::new(
                 Config::build("primary-raft-group".into())
-                    .election_timeout_min(20 * 1000) // 10 secs
-                    .election_timeout_max(50 * 1000) // 60 secs
+                    .election_timeout_min(20 * 1000) // 20 secs
+                    .election_timeout_max(50 * 1000) // 50 secs
                     .heartbeat_interval(5 * 1000)
                     .validate()
                     .expect("failed to build Raft config"),
@@ -670,7 +673,11 @@ impl NetworkNode for RaftNode {
             loop {
                 info!(">>> METRICS NODE {} <<<<<", id);
                 let metrics = node.metrics().borrow().clone();
-                debug!("{:?}", metrics);
+                debug!("{:?}\n", metrics);
+
+                info!(">>> DUMPING INTERNALLY NODE {} <<<", id);
+                storage.sm.read().await.cache.print_internally();
+
                 // Wait for a request
                 let request_listener = req_channel.recv().await;
                 match request_listener {
@@ -679,8 +686,8 @@ impl NetworkNode for RaftNode {
                         match request {
                             NetworkRequest::GetKey(query_params) => {
                                 info!("Node {} received GetKey({}) request", id, query_params.key);
-                                let clone2 = Arc::clone(&storage);
-                                let mut sm = clone2.sm.write().await;
+                                //let clone2 = Arc::clone(&storage);
+                                let mut sm = storage.sm.write().await;
                                 info!("Getting key {} from node {}", query_params.key, id.clone());
                                 let res = sm.cache.get(&query_params.key).await;
                                 resp_channel.send(NetworkResponse::BaseResponse(res)).await.unwrap();
@@ -929,6 +936,10 @@ where
             }
         }
         ()
+    }
+
+    fn print_internally(&self){
+        println!("Nothing to print.")
     }
 }
 

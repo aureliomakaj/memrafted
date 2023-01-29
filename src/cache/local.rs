@@ -51,4 +51,13 @@ impl Cache for LocalCache {
         );
         ()
     }
+
+    fn print_internally(&self) {
+        for (key, value) in self.map.iter() {
+            println!(
+                "Key: {}, value: {}, expiration: {}",
+                key, value.value, value.expiration
+            );
+        }
+    }
 }

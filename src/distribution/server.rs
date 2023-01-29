@@ -93,21 +93,3 @@ where
     Ok("Ok")
 }
 
-// // #[get("/print-internally")]
-// pub async fn print_internally<T>(data: web::Data<ServerState<T>>) -> Result<impl Responder>
-// where
-//     T: Cache,
-// {
-//     let inner = data.inner_cache.lock().unwrap();
-//     println!("Dumping cached values");
-//     for (key, server) in inner.server_map.iter() {
-//         println!("Server: {}", key);
-//         for (cached_key, cached_value) in server.map.iter() {
-//             println!(
-//                 "Key: {}, value: {}, expiration: {}",
-//                 cached_key, cached_value.value, cached_value.expiration
-//             );
-//         }
-//     }
-//     Ok("Ok")
-// }

@@ -43,4 +43,6 @@ pub trait Cache: Send + Sync {
         let elapsed = value.creation.elapsed().as_secs();
         elapsed > value.expiration
     }
+
+    fn print_internally(&self);
 }
