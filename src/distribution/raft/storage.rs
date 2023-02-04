@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, io::Cursor};
+use std::{
+    collections::{BTreeMap, HashSet},
+    io::Cursor,
+};
 
 use anyhow::Result;
 use async_raft::{
@@ -221,8 +224,8 @@ where
         let mut sm = self.sm.write().await;
         sm.last_applied_log = *index;
         match data {
-            CacheRequest::GetKey(GetKeyQueryParams { key }) => {
-                Ok(CacheResponse::GetKey(sm.cache.get(key).await))
+            CacheRequest::GetKey(GetKeyQueryParams { key, now }) => {
+                Ok(CacheResponse::GetKey(sm.cache.get(*now, key).await))
             }
             CacheRequest::SetKey(SetKeyJsonBody {
                 key,
@@ -232,8 +235,8 @@ where
                 sm.cache.set(key, value.clone(), *exp_time).await;
                 Ok(CacheResponse::SetKey())
             }
-            CacheRequest::Iter() => {
-                let set = sm.cache.value_set().await.into_iter().collect();
+            CacheRequest::Iter(now) => {
+                let set = sm.cache.get_all(*now).await.into_iter().collect();
                 Ok(CacheResponse::Iter(set))
             }
         }
@@ -245,8 +248,8 @@ where
         for (index, data) in entries {
             sm.last_applied_log = **index;
             match data {
-                CacheRequest::GetKey(GetKeyQueryParams { key }) => {
-                    sm.cache.get(key).await;
+                CacheRequest::GetKey(GetKeyQueryParams { key, now }) => {
+                    sm.cache.get(*now, key).await;
                 }
                 CacheRequest::SetKey(SetKeyJsonBody {
                     key,
@@ -255,7 +258,9 @@ where
                 }) => {
                     sm.cache.set(key, value.to_string(), *exp_time).await;
                 }
-                CacheRequest::Iter() => {}
+                CacheRequest::Iter(now) => {
+                    let _: HashSet<_> = sm.cache.get_all(*now).await.into_iter().collect();
+                }
             }
         }
         Ok(())
@@ -267,7 +272,7 @@ where
         {
             // Serialize the data of the state machine.
             let mut sm = self.sm.write().await;
-            let entries: Vec<_> = sm.cache.value_set().await.into_iter().collect();
+            let entries: Vec<_> = sm.cache.get_all(u64::MAX).await.into_iter().collect();
             data = serde_json::to_vec(&(sm.last_applied_log, entries))?;
             last_applied_log = sm.last_applied_log;
         } // Release state machine read lock.

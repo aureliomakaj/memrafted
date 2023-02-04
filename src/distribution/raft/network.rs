@@ -2,7 +2,6 @@ use core::panic;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Weak},
-    time::SystemTime,
 };
 
 use anyhow::{anyhow, Result};
@@ -19,7 +18,7 @@ use tracing::{info, warn};
 
 use crate::{
     api::{GetKeyQueryParams, SetKeyJsonBody},
-    cache::{Cache, FullType, KeyType, ValueType},
+    cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
 };
 
 use super::{storage::CacheStorage, CacheRequest, CacheResponse};
@@ -51,7 +50,7 @@ where
                         .election_timeout_max(50 * 1000) // 50 secs
                         .heartbeat_interval(5 * 1000)
                         .validate()
-                        .unwrap()
+                        .unwrap(),
                 ),
                 weak_self: ws.clone(),
             })
@@ -298,18 +297,32 @@ impl<T> Cache for CacheNetwork<T>
 where
     T: Cache + Default + 'static,
 {
-    async fn get(&mut self, k: &KeyType) -> Option<ValueType> {
-        let req = CacheRequest::GetKey(GetKeyQueryParams { key: k.to_string() });
+    async fn get(&mut self, now: Time, k: &KeyType) -> GetResult {
+        let req = CacheRequest::GetKey(GetKeyQueryParams {
+            key: k.to_string(),
+            now,
+        });
         match self.get_leader().await {
             Some(l) => match self.write_to(req, l).await {
                 Ok(CacheResponse::GetKey(vo)) => vo,
-                _ => None,
+                _ => GetResult::NotFound,
             },
-            None => None,
+            None => GetResult::NotFound,
         }
     }
 
-    async fn set(&mut self, k: &KeyType, value: ValueType, exp_time: SystemTime) {
+    async fn get_all(&mut self, now: Time) -> HashSet<FullType> {
+        let req = CacheRequest::Iter(now);
+        match self.get_leader().await {
+            Some(l) => match self.write_to(req, l).await {
+                Ok(CacheResponse::Iter(m)) => m,
+                _ => HashSet::new(),
+            },
+            None => HashSet::new(),
+        }
+    }
+
+    async fn set(&mut self, k: &KeyType, value: ValueType, exp_time: Time) {
         let req = CacheRequest::SetKey(SetKeyJsonBody {
             key: k.to_string(),
             value,
@@ -323,16 +336,5 @@ where
             }
             None => (),
         };
-    }
-
-    async fn value_set(&mut self) -> HashSet<FullType> {
-        let req = CacheRequest::Iter();
-        match self.get_leader().await {
-            Some(l) => match self.write_to(req, l).await {
-                Ok(CacheResponse::Iter(m)) => m,
-                _ => HashSet::new(),
-            },
-            None => HashSet::new(),
-        }
     }
 }

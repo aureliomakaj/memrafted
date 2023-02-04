@@ -1,6 +1,6 @@
 pub mod local;
 
-use std::{collections::HashSet, time::SystemTime};
+use std::collections::HashSet;
 
 use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub type KeyType = String;
 /// Type that can be stored in the cache
 pub type ValueType = String;
+// Client representation of time
+pub type Time = u64;
 
 /// Struct that describe a cached entity
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -20,25 +22,26 @@ pub struct FullType {
     pub value: ValueType,
 
     /// Expiration time. Until when the data should be available
-    #[serde(with = "serde_millis")]
-    pub exp_time: SystemTime,
+    pub exp_time: Time,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GetResult {
+    Found(FullType),
+    NotFound,
 }
 
 #[async_trait]
 pub trait Cache: Send + Sync {
     /// Get the cached valued corresponding to key `k`, `None` if not present or expired
-    async fn get(&mut self, k: &KeyType) -> Option<ValueType>;
+    async fn get(&mut self, &now: Time, k: &KeyType) -> GetResult;
 
-    /// Set the value `v` in the cache for key `k` and stores it until `expire_time`
-    async fn set(&mut self, k: &KeyType, v: ValueType, expire_time: SystemTime);
+    /// Get all the key-value pairs in an hash_set
+    async fn get_all(&mut self, &now: Time) -> HashSet<FullType>;
 
-    /// Remove the cached calue corresponding to key `k`
+    /// Set the value `v` in the cache for key `k` and stores it until `exp_time`
+    async fn set(&mut self, k: &KeyType, v: ValueType, exp_time: Time);
+
+    // Remove the cached calue corresponding to key `k`
     // fn drop(&mut self, k: &CacheKeyType);
-
-    async fn value_set(&mut self) -> HashSet<FullType>;
-
-    /// Wheter `entry` is expired or not
-    fn is_expired(entry: &FullType) -> bool {
-        SystemTime::now() > entry.exp_time
-    }
 }

@@ -1,14 +1,11 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    time::SystemTime,
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use async_raft::async_trait::async_trait;
 use futures::future::JoinAll;
 use tracing::info;
 
 use crate::{
-    cache::{Cache, FullType, KeyType, ValueType},
+    cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
     hash::hash,
 };
 
@@ -72,7 +69,7 @@ impl<T> Cache for HashOrchestrator<T>
 where
     T: Cache + Clone,
 {
-    async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
+    async fn get(&mut self, now: Time, key: &KeyType) -> GetResult {
         let hashed_key = hash(key);
         let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -84,16 +81,29 @@ where
 
                 // If the instance exists, try gettin the value
                 if let Some(cache) = cache_opt {
-                    cache.get(key).await
+                    cache.get(now, key).await
                 } else {
-                    None
+                    GetResult::NotFound
                 }
             }
-            None => None,
+            None => GetResult::NotFound,
         }
     }
 
-    async fn set(&mut self, key: &KeyType, value: ValueType, expire_time: SystemTime) {
+    async fn get_all(&mut self, now: Time) -> HashSet<FullType> {
+        let futures = self
+            .cache_map
+            .iter_mut()
+            .map(|(_, cache)| cache.get_all(now))
+            .collect::<Vec<_>>();
+        JoinAll::from_iter(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: Time) {
         let hashed_key = hash(key);
         let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -103,24 +113,11 @@ where
                 info!("Saving {} to server with key {}", hashed_key, index);
                 let cache_opt = self.cache_map.get_mut(index);
                 if let Some(cache) = cache_opt {
-                    cache.set(key, value, expire_time).await
+                    cache.set(key, value, exp_time).await
                 }
             }
             None => (),
         }
-    }
-
-    async fn value_set(&mut self) -> HashSet<FullType> {
-        let futures = self
-            .cache_map
-            .iter_mut()
-            .map(|(_, cache)| cache.value_set())
-            .collect::<Vec<_>>();
-        JoinAll::from_iter(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect()
     }
 }
 

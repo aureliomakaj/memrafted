@@ -1,7 +1,7 @@
 mod network;
 mod storage;
 
-use std::{collections::HashSet, sync::Arc, time::SystemTime};
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Result;
 use async_raft::{async_trait::async_trait, AppData, AppDataResponse, NodeId};
@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     api::{GetKeyQueryParams, SetKeyJsonBody},
-    cache::{Cache, FullType, KeyType, ValueType},
+    cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
 };
 
 use self::network::CacheNetwork;
@@ -20,13 +20,13 @@ use self::network::CacheNetwork;
 enum CacheRequest {
     GetKey(GetKeyQueryParams),
     SetKey(SetKeyJsonBody),
-    Iter(),
+    Iter(Time),
 }
 impl AppData for CacheRequest {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum CacheResponse {
-    GetKey(Option<ValueType>),
+    GetKey(GetResult),
     SetKey(),
     Iter(HashSet<FullType>),
 }
@@ -71,15 +71,15 @@ impl<T> Cache for RaftManager<T>
 where
     T: Cache + Default + 'static,
 {
-    async fn get(&mut self, k: &KeyType) -> Option<ValueType> {
-        self.net.write().await.get(k).await
+    async fn get(&mut self, now: Time, k: &KeyType) -> GetResult {
+        self.net.write().await.get(now, k).await
     }
 
-    async fn set(&mut self, k: &KeyType, v: ValueType, exp_time: SystemTime) {
+    async fn get_all(&mut self, now: Time) -> HashSet<FullType> {
+        self.net.write().await.get_all(now).await
+    }
+
+    async fn set(&mut self, k: &KeyType, v: ValueType, exp_time: Time) {
         self.net.write().await.set(k, v, exp_time).await
-    }
-
-    async fn value_set(&mut self) -> HashSet<FullType> {
-        self.net.write().await.value_set().await
     }
 }

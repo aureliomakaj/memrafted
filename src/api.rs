@@ -1,10 +1,10 @@
-use std::{sync::Mutex, time::SystemTime};
+use std::sync::Mutex;
 
 use actix_web::{web, Responder, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cache::{Cache, KeyType, ValueType},
+    cache::{Cache, KeyType, Time, ValueType},
     distribution::orchestrator::Orchestrator,
 };
 
@@ -29,19 +29,19 @@ where
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct GetKeyQueryParams {
     pub key: KeyType,
+    pub now: Time,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct SetKeyJsonBody {
     pub key: KeyType,
     pub value: ValueType,
-    #[serde(with = "serde_millis")]
-    pub exp_time: SystemTime,
+    pub exp_time: Time,
 }
 
 #[derive(Deserialize)]
 pub struct AddServerJsonBody {
-    name: String,
+    pub name: String,
 }
 
 // #[get("/get-key")]
@@ -53,7 +53,7 @@ where
     T: Cache,
 {
     let mut inner = data.cache.lock().unwrap();
-    let res_opt = inner.get(&query_params.key).await;
+    let res_opt = inner.get(query_params.now, &query_params.key).await;
     Ok(web::Json(res_opt))
 }
 

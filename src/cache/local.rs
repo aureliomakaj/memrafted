@@ -1,13 +1,10 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::SystemTime,
-};
+use std::collections::{HashMap, HashSet};
 
 use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::{Cache, FullType, KeyType, ValueType};
+use super::{Cache, FullType, GetResult, KeyType, Time, ValueType};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct LocalCache {
@@ -18,28 +15,38 @@ impl LocalCache {}
 
 #[async_trait]
 impl Cache for LocalCache {
-    async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
+    async fn get(&mut self, now: Time, key: &KeyType) -> GetResult {
         // Get the value from the hashmap
         let in_cache = self.map.get(key);
         match in_cache {
             Some(value) => {
                 // The value was present.
                 // Check if the expiration hasn't been reached
-                if LocalCache::is_expired(value) {
+                if value.exp_time < now {
                     // Expiration reached. Remove the key from the hashmap
-                    self.map.remove(key);
+                    self.map.remove(key).unwrap();
                     info!("Key {} expired", key);
                     // Return None as the value wasn't valid anymore
-                    None
+                    GetResult::NotFound
                 } else {
-                    Some(value.value.clone())
+                    GetResult::Found(value.clone())
                 }
             }
-            None => None,
+            None => GetResult::NotFound,
         }
     }
 
-    async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: SystemTime) {
+    async fn get_all(&mut self, now: Time) -> HashSet<FullType> {
+        self.map = self
+            .map
+            .drain()
+            .filter(|(_, info)| -> bool { info.exp_time < now })
+            .collect();
+
+        self.map.clone().into_values().collect()
+    }
+
+    async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: Time) {
         info!("Setting {key} := {value}");
         self.map.insert(
             key.to_string(),
@@ -50,17 +57,5 @@ impl Cache for LocalCache {
             },
         );
         ()
-    }
-
-    async fn value_set(&mut self) -> HashSet<FullType> {
-        let now = SystemTime::now();
-
-        self.map = self
-            .map
-            .drain()
-            .filter(|(_, info)| -> bool { info.exp_time < now })
-            .collect();
-
-        self.map.clone().into_values().collect()
     }
 }
