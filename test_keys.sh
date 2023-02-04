@@ -1,11 +1,15 @@
 curl -H "Content-type: application/json" -d '{ "name": "server1" }' 'http://127.0.0.1:8081/add-cache'
 
-curl -XPOST -H "Content-type: application/json" -d '{ "key": "s_1", "value": "v_1", "expiration": 60 }' 'http://127.0.0.1:8081/set-key'
+make_json () {
+    t=`date +%s`
+    json="{ \"key\": \"$1\", \"value\": \"$2\", \"exp_time\": $(expr $t + $3) }"
+}
 
-curl -XPOST -H "Content-type: application/json" -d '{ "key": "s_2", "value": "v_2", "expiration": 60 }' 'http://127.0.0.1:8081/set-key'
+make_json "k_1" "v_1" 300
+curl -XPOST -H "Content-type: application/json" -d "$json" 'http://127.0.0.1:8081/set-key'
 
-curl -XPOST -H "Content-type: application/json" -d '{ "key": "s_3", "value": "v_3", "expiration": 60 }' 'http://127.0.0.1:8081/set-key'
+make_json "k_2" "v_2" 300
+curl -XPOST -H "Content-type: application/json" -d "$json" 'http://127.0.0.1:8081/set-key'
 
-
-
-
+make_json "k_3" "v_3" 300
+curl -XPOST -H "Content-type: application/json" -d "$json" 'http://127.0.0.1:8081/set-key'

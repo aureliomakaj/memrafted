@@ -13,8 +13,8 @@ use async_raft::{
     },
     Config, NodeId, Raft, RaftError, RaftNetwork,
 };
-use log::{info, warn};
 use tokio::sync::RwLock;
+use tracing::{info, warn};
 
 use crate::{
     api::{GetKeyQueryParams, SetKeyJsonBody},

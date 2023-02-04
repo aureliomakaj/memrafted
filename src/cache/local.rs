@@ -5,6 +5,7 @@ use std::{
 
 use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use super::{Cache, FullType, KeyType, ValueType};
 
@@ -27,6 +28,7 @@ impl Cache for LocalCache {
                 if LocalCache::is_expired(value) {
                     // Expiration reached. Remove the key from the hashmap
                     self.map.remove(key);
+                    info!("Key {} expired", key);
                     // Return None as the value wasn't valid anymore
                     None
                 } else {
@@ -38,6 +40,7 @@ impl Cache for LocalCache {
     }
 
     async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: SystemTime) {
+        info!("Setting {key} := {value}");
         self.map.insert(
             key.to_string(),
             FullType {

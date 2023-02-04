@@ -39,8 +39,6 @@ pub struct SetKeyJsonBody {
     pub exp_time: SystemTime,
 }
 
-pub type ResponseBody = Option<String>;
-
 #[derive(Deserialize)]
 pub struct AddServerJsonBody {
     name: String,

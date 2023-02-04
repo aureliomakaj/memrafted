@@ -5,7 +5,7 @@ use std::{
 
 use async_raft::async_trait::async_trait;
 use futures::future::JoinAll;
-use log::info;
+use tracing::info;
 
 use crate::{
     cache::{Cache, FullType, KeyType, ValueType},
