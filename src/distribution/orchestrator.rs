@@ -1,14 +1,23 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    time::SystemTime,
+};
 
 use async_raft::async_trait::async_trait;
+use futures::future::JoinAll;
 use log::info;
 
 use crate::{
-    cache::{Cache, KeyType, ValueType},
+    cache::{Cache, FullType, KeyType, ValueType},
     hash::hash,
 };
 
-use super::Orchestrator;
+#[async_trait]
+pub trait Orchestrator: Cache {
+    type CacheType;
+    async fn add_cache(&mut self, name: String, cache: Self::CacheType);
+    async fn remove_cache(&mut self, name: String);
+}
 
 // Pool that simulates a distributed cache.
 // It can contain zero or more cache servers
@@ -63,13 +72,6 @@ impl<T> Cache for HashOrchestrator<T>
 where
     T: Cache + Clone,
 {
-    async fn new() -> Self {
-        HashOrchestrator {
-            ring: BTreeMap::new(),
-            cache_map: HashMap::new(),
-        }
-    }
-
     async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
         let hashed_key = hash(key);
         let cloned = self.clone();
@@ -91,7 +93,7 @@ where
         }
     }
 
-    async fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
+    async fn set(&mut self, key: &KeyType, value: ValueType, expire_time: SystemTime) {
         let hashed_key = hash(key);
         let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -101,15 +103,24 @@ where
                 info!("Saving {} to server with key {}", hashed_key, index);
                 let cache_opt = self.cache_map.get_mut(index);
                 if let Some(cache) = cache_opt {
-                    cache.set(key, value, expiration).await
+                    cache.set(key, value, expire_time).await
                 }
             }
             None => (),
         }
     }
 
-    fn print_internally(&self) {
-        println!("Nothing to print.")
+    async fn value_set(&mut self) -> HashSet<FullType> {
+        let futures = self
+            .cache_map
+            .iter_mut()
+            .map(|(_, cache)| cache.value_set())
+            .collect::<Vec<_>>();
+        JoinAll::from_iter(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 }
 
@@ -118,8 +129,10 @@ impl<T> Orchestrator for HashOrchestrator<T>
 where
     T: Cache + Clone,
 {
+    type CacheType = T;
+
     ///Add a new cache to the pool
-    async fn add_cache(&mut self, name: String) {
+    async fn add_cache(&mut self, name: String, cache: Self::CacheType) {
         let mut keys = vec![];
         for i in 0..100 {
             keys.push(format!("{}_{}", name, i));
@@ -127,7 +140,7 @@ where
 
         let cloned = name.clone();
         // Create a new memrafted instace and map it to the server name
-        self.cache_map.insert(name, T::new().await);
+        self.cache_map.insert(name, cache);
         for key in keys {
             self.ring.insert(hash(&key), cloned.clone());
         }

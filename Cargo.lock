@@ -819,6 +819,7 @@ dependencies = [
  "async-channel",
  "async-raft",
  "env_logger",
+ "futures",
  "log",
  "serde",
  "serde_json",

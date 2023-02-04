@@ -1,6 +1,6 @@
 pub mod local;
 
-use std::time::Instant;
+use std::{collections::HashSet, time::SystemTime};
 
 use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -11,38 +11,34 @@ pub type KeyType = String;
 pub type ValueType = String;
 
 /// Struct that describe a cached entity
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CachedInfo {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct FullType {
+    /// The key of the entry
+    pub key: KeyType,
+
     /// The value stored
-    value: ValueType,
+    pub value: ValueType,
 
-    /// Expiration time in seconds. How long the data should be available
-    expiration: u64,
-
-    /// Time of when the value was inserted or updated
+    /// Expiration time. Until when the data should be available
     #[serde(with = "serde_millis")]
-    creation: Instant,
+    pub exp_time: SystemTime,
 }
 
 #[async_trait]
 pub trait Cache: Send + Sync {
-    /// Creates new empty cache
-    async fn new() -> Self;
-
     /// Get the cached valued corresponding to key `k`, `None` if not present or expired
     async fn get(&mut self, k: &KeyType) -> Option<ValueType>;
 
-    /// Set the value `v` in the cache for key `k` and stores it for `duration` seconds
-    async fn set(&mut self, k: &KeyType, v: ValueType, duration: u64);
+    /// Set the value `v` in the cache for key `k` and stores it until `expire_time`
+    async fn set(&mut self, k: &KeyType, v: ValueType, expire_time: SystemTime);
 
     /// Remove the cached calue corresponding to key `k`
     // fn drop(&mut self, k: &CacheKeyType);
 
-    /// Wheter `value` is expired or not
-    fn is_expired(value: &CachedInfo) -> bool {
-        let elapsed = value.creation.elapsed().as_secs();
-        elapsed > value.expiration
-    }
+    async fn value_set(&mut self) -> HashSet<FullType>;
 
-    fn print_internally(&self);
+    /// Wheter `entry` is expired or not
+    fn is_expired(entry: &FullType) -> bool {
+        SystemTime::now() > entry.exp_time
+    }
 }

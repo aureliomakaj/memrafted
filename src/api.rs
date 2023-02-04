@@ -1,31 +1,32 @@
-use std::sync::Mutex;
+use std::{sync::Mutex, time::SystemTime};
 
 use actix_web::{web, Responder, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{Cache, KeyType, ValueType};
-
-use super::Orchestrator;
+use crate::{
+    cache::{Cache, KeyType, ValueType},
+    distribution::orchestrator::Orchestrator,
+};
 
 pub struct ServerState<T>
 where
     T: Cache,
 {
-    inner_cache: Mutex<T>,
+    cache: Mutex<T>,
 }
 
 impl<T> ServerState<T>
 where
     T: Cache,
 {
-    pub async fn new() -> Self {
+    pub async fn new(cache: T) -> Self {
         Self {
-            inner_cache: T::new().await.into(),
+            cache: cache.into(),
         }
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct GetKeyQueryParams {
     pub key: KeyType,
 }
@@ -34,8 +35,11 @@ pub struct GetKeyQueryParams {
 pub struct SetKeyJsonBody {
     pub key: KeyType,
     pub value: ValueType,
-    pub expiration: u64,
+    #[serde(with = "serde_millis")]
+    pub exp_time: SystemTime,
 }
+
+pub type ResponseBody = Option<String>;
 
 #[derive(Deserialize)]
 pub struct AddServerJsonBody {
@@ -50,7 +54,7 @@ pub async fn get_key<T>(
 where
     T: Cache,
 {
-    let mut inner = data.inner_cache.lock().unwrap();
+    let mut inner = data.cache.lock().unwrap();
     let res_opt = inner.get(&query_params.key).await;
     Ok(web::Json(res_opt))
 }
@@ -63,8 +67,10 @@ pub async fn set_key<T>(
 where
     T: Cache,
 {
-    let mut inner = data.inner_cache.lock().unwrap();
-    inner.set(&json_req.key, json_req.value.clone(), json_req.expiration).await;
+    let mut inner = data.cache.lock().unwrap();
+    inner
+        .set(&json_req.key, json_req.value.clone(), json_req.exp_time)
+        .await;
     Ok("Ok")
 }
 
@@ -75,12 +81,16 @@ pub async fn add_server<T>(
 ) -> Result<impl Responder>
 where
     T: Orchestrator,
+    T::CacheType: Default,
 {
-    let mut inner = data.inner_cache.lock().unwrap();
-    inner.add_cache(json_req.name.clone()).await;
+    let mut inner = data.cache.lock().unwrap();
+    inner
+        .add_cache(json_req.name.clone(), T::CacheType::default())
+        .await;
     Ok("Ok")
 }
 
+// #[post("/remove-cache")]
 pub async fn remove_server<T>(
     data: web::Data<ServerState<T>>,
     json_req: web::Json<AddServerJsonBody>,
@@ -88,8 +98,7 @@ pub async fn remove_server<T>(
 where
     T: Orchestrator,
 {
-    let mut inner = data.inner_cache.lock().unwrap();
+    let mut inner = data.cache.lock().unwrap();
     inner.remove_cache(json_req.name.clone()).await;
     Ok("Ok")
 }
-

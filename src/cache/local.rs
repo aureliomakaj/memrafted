@@ -1,25 +1,22 @@
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::SystemTime,
+};
 
 use async_raft::async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{Cache, CachedInfo, KeyType, ValueType};
+use super::{Cache, FullType, KeyType, ValueType};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct LocalCache {
-    map: HashMap<String, CachedInfo>,
+    map: HashMap<String, FullType>,
 }
 
 impl LocalCache {}
 
 #[async_trait]
 impl Cache for LocalCache {
-    async fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-        }
-    }
-
     async fn get(&mut self, key: &KeyType) -> Option<ValueType> {
         // Get the value from the hashmap
         let in_cache = self.map.get(key);
@@ -40,24 +37,27 @@ impl Cache for LocalCache {
         }
     }
 
-    async fn set(&mut self, key: &KeyType, value: ValueType, expiration: u64) {
+    async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: SystemTime) {
         self.map.insert(
-            String::from(key),
-            CachedInfo {
+            key.to_string(),
+            FullType {
+                key: key.to_string(),
                 value,
-                expiration,
-                creation: Instant::now(),
+                exp_time,
             },
         );
         ()
     }
 
-    fn print_internally(&self) {
-        for (key, value) in self.map.iter() {
-            println!(
-                "Key: {}, value: {}, expiration: {}",
-                key, value.value, value.expiration
-            );
-        }
+    async fn value_set(&mut self) -> HashSet<FullType> {
+        let now = SystemTime::now();
+
+        self.map = self
+            .map
+            .drain()
+            .filter(|(_, info)| -> bool { info.exp_time < now })
+            .collect();
+
+        self.map.clone().into_values().collect()
     }
 }
