@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Weak},
@@ -44,7 +45,14 @@ where
             RwLock::new(Self {
                 name: name.clone(),
                 nodes: HashMap::new(),
-                config: Arc::new(Config::build(name).validate().unwrap()),
+                config: Arc::new(
+                    Config::build(name)
+                        .election_timeout_min(20 * 1000) // 20 secs
+                        .election_timeout_max(50 * 1000) // 50 secs
+                        .heartbeat_interval(5 * 1000)
+                        .validate()
+                        .unwrap()
+                ),
                 weak_self: ws.clone(),
             })
         })
@@ -67,6 +75,23 @@ where
             let mut members = HashSet::new();
             members.insert(id);
             node.initialize(members).await.unwrap_or_default();
+        }else{
+            node.add_non_voter(id).await.unwrap_or_default();
+            let mut members = HashSet::new();
+            for (id_node, _) in self.nodes.iter() {
+                members.insert(*id_node);
+            }
+            members.insert(id);
+            let leader_opt = self.get_leader().await;
+            if let Some(leader) = leader_opt {
+                if let Some((true, leader_node)) = self.nodes.get(&leader) {
+                    leader_node.change_membership(members).await.unwrap();
+                }else{
+                    panic!("Leader not available");
+                }
+            }else{
+                panic!("Cannot add node {} to network {}. Leader not found", id, self.name);
+            }
         }
         self.nodes.insert(id, (true, node));
         Ok(())
@@ -173,6 +198,7 @@ where
         target: NodeId,
         rpc: AppendEntriesRequest<CacheRequest>,
     ) -> Result<AppendEntriesResponse> {
+        info!("Append entries");
         match self.read().await.nodes.get(&target) {
             Some((true, n)) => {
                 info!("AppendEntriesRequest for node {}", target);
