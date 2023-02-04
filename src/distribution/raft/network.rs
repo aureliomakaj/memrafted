@@ -12,7 +12,7 @@ use async_raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteRequest, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
-    Config, NodeId, Raft, RaftError, RaftNetwork,
+    ChangeConfigError, Config, NodeId, Raft, RaftError, RaftNetwork,
 };
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -71,30 +71,58 @@ where
         let storage = Arc::new(CacheStorage::new(id));
         let node = CacheNode::new(id, config, network, storage);
 
-        if self.nodes.is_empty() {
-            let mut members = HashSet::new();
-            members.insert(id);
-            node.initialize(members).await.unwrap_or_default();
-        }else{
-            let leader_opt = self.get_leader().await;
-            if let Some(leader) = leader_opt {
-                if let Some((true, leader_node)) = self.nodes.get(&leader) {
-                    leader_node.add_non_voter(id).await.unwrap_or_default();
-                    let mut members = HashSet::new();
-                    for (id_node, _) in self.nodes.iter() {
-                        members.insert(*id_node);
-                    }
-                    members.insert(id);
-                    leader_node.change_membership(members).await.unwrap();
-                }else{
-                    panic!("Leader not available");
+        let mut members: HashSet<_> = self.nodes.iter().map(|(i, _)| *i).collect();
+        members.insert(id);
+        node.initialize(members.clone()).await.unwrap_or_default();
+
+        self.nodes.insert(id, (true, node));
+
+        let mut res = Err(ChangeConfigError::NodeNotLeader(Some(id)));
+
+        while let Err(ChangeConfigError::NodeNotLeader(Some(l))) = res {
+            match self.nodes.get(&l) {
+                Some((true, ln)) => {
+                    res = ln.change_membership(members.clone()).await;
                 }
-            }else{
-                panic!("Cannot add node {} to network {}. Leader not found", id, self.name);
+                Some((false, _)) => {
+                    return Err(anyhow!(
+                        "Suggested leader {} is not reachable in network {}",
+                        l,
+                        self.name
+                    ))
+                }
+                None => {
+                    return Err(anyhow!(
+                        "Suggested leader {} does not exists in network {}",
+                        l,
+                        self.name
+                    ))
+                }
             }
         }
-        self.nodes.insert(id, (true, node));
-        Ok(())
+
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) => match e {
+                ChangeConfigError::RaftError(_) => todo!(),
+                ChangeConfigError::ConfigChangeInProgress => Err(anyhow!(
+                    "The cluster {} is already undergoing a configuration change.",
+                    self.name
+                )),
+                ChangeConfigError::InoperableConfig => Err(anyhow!(
+                    "Adding node {} would leave the cluster {} in an inoperable state.",
+                    id,
+                    self.name
+                )),
+                ChangeConfigError::Noop => Ok(()),
+                e => Err(anyhow!(
+                    "Unable to add node {} to network {}. {}",
+                    id,
+                    self.name,
+                    e
+                )),
+            },
+        }
     }
 
     pub(crate) async fn remove_node(&mut self, id: NodeId) -> Result<()> {
