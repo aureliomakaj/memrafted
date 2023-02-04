@@ -18,9 +18,6 @@ async fn main() -> Result<()> {
     //std::env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
 
-    println!("Starting server...");
-    println!("Server ready. Listening on 127.0.0.1:8081");
-
     let mut rm = RaftManager::<LocalCache>::new("Network".to_string());
     rm.add_node(0).await.unwrap();
     rm.add_node(1).await.unwrap();
@@ -28,7 +25,7 @@ async fn main() -> Result<()> {
 
     let appstate = web::Data::new(ServerState::new(rm).await);
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         App::new()
             .app_data(appstate.clone())
             .route(
@@ -49,6 +46,10 @@ async fn main() -> Result<()> {
         // )
     })
     .bind(("127.0.0.1", 8081))?
-    .run()
-    .await
+    .run();
+
+    println!("Starting server...");
+    println!("Server ready. Listening on 127.0.0.1:8081");
+
+    server.await
 }

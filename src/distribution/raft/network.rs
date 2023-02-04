@@ -14,6 +14,7 @@ use async_raft::{
     Config, NodeId, Raft, RaftError, RaftNetwork,
 };
 use log::{info, warn};
+use tokio::sync::RwLock;
 
 use crate::{
     api::{GetKeyQueryParams, SetKeyJsonBody},
@@ -22,7 +23,7 @@ use crate::{
 
 use super::{storage::CacheStorage, CacheRequest, CacheResponse};
 
-type CacheNode<T> = Raft<CacheRequest, CacheResponse, CacheNetwork<T>, CacheStorage<T>>;
+type CacheNode<T> = Raft<CacheRequest, CacheResponse, RwLock<CacheNetwork<T>>, CacheStorage<T>>;
 
 pub(super) struct CacheNetwork<T>
 where
@@ -31,19 +32,21 @@ where
     name: String,
     nodes: HashMap<NodeId, (bool, CacheNode<T>)>,
     config: Arc<Config>,
-    weak_self: Weak<Self>,
+    weak_self: Weak<RwLock<Self>>,
 }
 
 impl<T> CacheNetwork<T>
 where
     T: Cache + Default + 'static,
 {
-    pub(crate) fn new(name: String) -> Arc<Self> {
-        Arc::new_cyclic(|ws| Self {
-            name: name.clone(),
-            nodes: HashMap::new(),
-            config: Arc::new(Config::build(name).validate().unwrap()),
-            weak_self: ws.clone(),
+    pub(crate) fn new(name: String) -> Arc<RwLock<Self>> {
+        Arc::new_cyclic(|ws| {
+            RwLock::new(Self {
+                name: name.clone(),
+                nodes: HashMap::new(),
+                config: Arc::new(Config::build(name).validate().unwrap()),
+                weak_self: ws.clone(),
+            })
         })
     }
 
@@ -161,7 +164,7 @@ where
 }
 
 #[async_trait]
-impl<T> RaftNetwork<CacheRequest> for CacheNetwork<T>
+impl<T> RaftNetwork<CacheRequest> for RwLock<CacheNetwork<T>>
 where
     T: Cache + Default + 'static,
 {
@@ -170,7 +173,7 @@ where
         target: NodeId,
         rpc: AppendEntriesRequest<CacheRequest>,
     ) -> Result<AppendEntriesResponse> {
-        match self.nodes.get(&target) {
+        match self.read().await.nodes.get(&target) {
             Some((true, n)) => {
                 info!("AppendEntriesRequest for node {}", target);
                 match n.append_entries(rpc).await {
@@ -195,7 +198,7 @@ where
         target: NodeId,
         rpc: InstallSnapshotRequest,
     ) -> Result<InstallSnapshotResponse> {
-        match self.nodes.get(&target) {
+        match self.read().await.nodes.get(&target) {
             Some((true, n)) => {
                 info!("InstallSnapshotRequest for node {}", target);
                 match n.install_snapshot(rpc).await {
@@ -216,7 +219,7 @@ where
     }
 
     async fn vote(&self, target: NodeId, rpc: VoteRequest) -> Result<VoteResponse> {
-        match self.nodes.get(&target) {
+        match self.read().await.nodes.get(&target) {
             Some((true, n)) => {
                 info!("VoteRequest for node {}", target);
                 match n.vote(rpc).await {
