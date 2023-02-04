@@ -76,15 +76,15 @@ where
             members.insert(id);
             node.initialize(members).await.unwrap_or_default();
         }else{
-            node.add_non_voter(id).await.unwrap_or_default();
-            let mut members = HashSet::new();
-            for (id_node, _) in self.nodes.iter() {
-                members.insert(*id_node);
-            }
-            members.insert(id);
             let leader_opt = self.get_leader().await;
             if let Some(leader) = leader_opt {
                 if let Some((true, leader_node)) = self.nodes.get(&leader) {
+                    leader_node.add_non_voter(id).await.unwrap_or_default();
+                    let mut members = HashSet::new();
+                    for (id_node, _) in self.nodes.iter() {
+                        members.insert(*id_node);
+                    }
+                    members.insert(id);
                     leader_node.change_membership(members).await.unwrap();
                 }else{
                     panic!("Leader not available");
@@ -198,7 +198,6 @@ where
         target: NodeId,
         rpc: AppendEntriesRequest<CacheRequest>,
     ) -> Result<AppendEntriesResponse> {
-        info!("Append entries");
         match self.read().await.nodes.get(&target) {
             Some((true, n)) => {
                 info!("AppendEntriesRequest for node {}", target);
