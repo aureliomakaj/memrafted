@@ -15,7 +15,7 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    api::{GetKeyQueryParams, SetKeyJsonBody},
+    api::{DropKeyQueryParams, GetKeyQueryParams, SetKeyJsonBody},
     cache::{Cache, FullType},
 };
 
@@ -235,6 +235,10 @@ where
                 sm.cache.set(key, value.clone(), *exp_time).await;
                 Ok(CacheResponse::SetKey())
             }
+            CacheRequest::DropKey(DropKeyQueryParams { key }) => {
+                sm.cache.drop(key).await;
+                Ok(CacheResponse::DropKey())
+            }
             CacheRequest::Iter(now) => {
                 let set = sm.cache.get_all(*now).await.into_iter().collect();
                 Ok(CacheResponse::Iter(set))
@@ -257,6 +261,9 @@ where
                     exp_time,
                 }) => {
                     sm.cache.set(key, value.to_string(), *exp_time).await;
+                }
+                CacheRequest::DropKey(DropKeyQueryParams { key }) => {
+                    sm.cache.drop(key).await;
                 }
                 CacheRequest::Iter(now) => {
                     let _: HashSet<_> = sm.cache.get_all(*now).await.into_iter().collect();

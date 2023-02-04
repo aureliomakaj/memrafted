@@ -24,7 +24,7 @@ impl Cache for LocalCache {
                 // Check if the expiration hasn't been reached
                 if value.exp_time < now {
                     // Expiration reached. Remove the key from the hashmap
-                    self.map.remove(key).unwrap();
+                    self.map.remove(key);
                     info!("Key {} expired", key);
                     // Return None as the value wasn't valid anymore
                     GetResult::NotFound
@@ -57,5 +57,9 @@ impl Cache for LocalCache {
             },
         );
         ()
+    }
+
+    async fn drop(&mut self, key: &KeyType) {
+        self.map.remove(key);
     }
 }

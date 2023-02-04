@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::{
-    api::{GetKeyQueryParams, SetKeyJsonBody},
+    api::{GetKeyQueryParams, SetKeyJsonBody, DropKeyQueryParams},
     cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
 };
 
@@ -327,6 +327,20 @@ where
             key: k.to_string(),
             value,
             exp_time,
+        });
+        match self.get_leader().await {
+            Some(l) => {
+                self.write_to(req, l)
+                    .await
+                    .unwrap_or(CacheResponse::SetKey());
+            }
+            None => (),
+        };
+    }
+
+    async fn drop(&mut self, key: &KeyType) {
+        let req = CacheRequest::DropKey(DropKeyQueryParams {
+            key: key.to_string()
         });
         match self.get_leader().await {
             Some(l) => {

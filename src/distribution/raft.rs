@@ -1,7 +1,7 @@
 mod network;
 mod storage;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, ops::DerefMut, sync::Arc};
 
 use anyhow::Result;
 use async_raft::{async_trait::async_trait, AppData, AppDataResponse, NodeId};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
-    api::{GetKeyQueryParams, SetKeyJsonBody},
+    api::{DropKeyQueryParams, GetKeyQueryParams, SetKeyJsonBody},
     cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
 };
 
@@ -20,6 +20,7 @@ use self::network::CacheNetwork;
 enum CacheRequest {
     GetKey(GetKeyQueryParams),
     SetKey(SetKeyJsonBody),
+    DropKey(DropKeyQueryParams),
     Iter(Time),
 }
 impl AppData for CacheRequest {}
@@ -28,6 +29,7 @@ impl AppData for CacheRequest {}
 enum CacheResponse {
     GetKey(GetResult),
     SetKey(),
+    DropKey(),
     Iter(HashSet<FullType>),
 }
 impl AppDataResponse for CacheResponse {}
@@ -81,5 +83,9 @@ where
 
     async fn set(&mut self, k: &KeyType, v: ValueType, exp_time: Time) {
         self.net.write().await.set(k, v, exp_time).await
+    }
+
+    async fn drop(&mut self, key: &KeyType) {
+        self.net.write().await.deref_mut().drop(key).await
     }
 }

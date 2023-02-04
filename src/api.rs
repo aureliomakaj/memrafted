@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{ops::DerefMut, sync::Mutex};
 
 use actix_web::{web, Responder, Result};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,11 @@ pub struct SetKeyJsonBody {
     pub exp_time: Time,
 }
 
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub struct DropKeyQueryParams {
+    pub key: KeyType,
+}
+
 #[derive(Deserialize)]
 pub struct AddServerJsonBody {
     pub name: String,
@@ -69,6 +74,19 @@ where
     inner
         .set(&json_req.key, json_req.value.clone(), json_req.exp_time)
         .await;
+    Ok("Ok")
+}
+
+// #[post("/drop-key")]
+pub async fn drop_key<T>(
+    data: web::Data<ServerState<T>>,
+    json_req: web::Json<DropKeyQueryParams>,
+) -> Result<impl Responder>
+where
+    T: Cache,
+{
+    let mut inner = data.cache.lock().unwrap();
+    inner.deref_mut().drop(&json_req.key).await;
     Ok("Ok")
 }
 

@@ -33,15 +33,15 @@ pub enum GetResult {
 
 #[async_trait]
 pub trait Cache: Send + Sync {
-    /// Get the cached valued corresponding to key `k`, `None` if not present or expired
-    async fn get(&mut self, &now: Time, k: &KeyType) -> GetResult;
+    /// Get the cached valued corresponding to key `key`, `None` if not present or expired
+    async fn get(&mut self, &now: Time, key: &KeyType) -> GetResult;
 
     /// Get all the key-value pairs in an hash_set
     async fn get_all(&mut self, &now: Time) -> HashSet<FullType>;
 
-    /// Set the value `v` in the cache for key `k` and stores it until `exp_time`
-    async fn set(&mut self, k: &KeyType, v: ValueType, exp_time: Time);
+    /// Set the `value` in the cache for `key` and stores it until `exp_time`
+    async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: Time);
 
-    // Remove the cached calue corresponding to key `k`
-    // fn drop(&mut self, k: &CacheKeyType);
+    /// Remove the cached calue corresponding to key `key`
+    async fn drop(&mut self, key: &KeyType);
 }

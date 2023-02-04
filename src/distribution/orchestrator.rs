@@ -18,7 +18,7 @@ pub trait Orchestrator: Cache {
 
 // Pool that simulates a distributed cache.
 // It can contain zero or more cache servers
-#[derive(Clone)]
+#[derive(Default)]
 pub struct HashOrchestrator<T>
 where
     T: Cache,
@@ -32,7 +32,7 @@ where
 
 impl<T> HashOrchestrator<T>
 where
-    T: Cache + Clone,
+    T: Cache,
 {
     /// Implementation of "Ketama Consistent Hashing".
     /// The server key is hashed, and inserted in the ring, possibly multiple times.
@@ -67,17 +67,16 @@ where
 #[async_trait]
 impl<T> Cache for HashOrchestrator<T>
 where
-    T: Cache + Clone,
+    T: Cache,
 {
     async fn get(&mut self, now: Time, key: &KeyType) -> GetResult {
         let hashed_key = hash(key);
-        let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
-        let idx_opt = cloned.get_cache_from_key(hashed_key);
+        let idx_opt = self.get_cache_from_key(hashed_key);
         match idx_opt {
             Some(index) => {
                 // Get the memrafted instance of that index
-                let cache_opt = self.cache_map.get_mut(index);
+                let cache_opt = self.cache_map.get_mut(&index.clone());
 
                 // If the instance exists, try gettin the value
                 if let Some(cache) = cache_opt {
@@ -105,15 +104,30 @@ where
 
     async fn set(&mut self, key: &KeyType, value: ValueType, exp_time: Time) {
         let hashed_key = hash(key);
-        let cloned = self.clone();
         // Get the index of the server with the hashed name nearest to the hashed key
-        let idx_opt = cloned.get_cache_from_key(hashed_key);
+        let idx_opt = self.get_cache_from_key(hashed_key);
         match idx_opt {
             Some(index) => {
                 info!("Saving {} to server with key {}", hashed_key, index);
-                let cache_opt = self.cache_map.get_mut(index);
+                let cache_opt = self.cache_map.get_mut(&index.clone());
                 if let Some(cache) = cache_opt {
                     cache.set(key, value, exp_time).await
+                }
+            }
+            None => (),
+        }
+    }
+
+    async fn drop(&mut self, key: &KeyType) {
+        let hashed_key = hash(key);
+        // Get the index of the server with the hashed name nearest to the hashed key
+        let idx_opt = self.get_cache_from_key(hashed_key);
+        match idx_opt {
+            Some(index) => {
+                info!("Saving {} to server with key {}", hashed_key, index);
+                let cache_opt = self.cache_map.get_mut(&index.clone());
+                if let Some(cache) = cache_opt {
+                    cache.drop(key).await
                 }
             }
             None => (),
@@ -124,7 +138,7 @@ where
 #[async_trait]
 impl<T> Orchestrator for HashOrchestrator<T>
 where
-    T: Cache + Clone,
+    T: Cache,
 {
     type CacheType = T;
 
