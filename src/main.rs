@@ -4,8 +4,10 @@ mod distribution;
 mod hash;
 
 use std::io::Result;
+use std::time::Duration;
 
 use actix_web::{web, App, HttpServer};
+use tokio::time::sleep;
 
 use crate::api::{add_server, drop_key, get_key, remove_server, set_key, ServerState};
 use crate::cache::local::LocalCache;
@@ -22,6 +24,21 @@ async fn main() -> Result<()> {
     rm.add_node(0).await.unwrap();
     rm.add_node(1).await.unwrap();
     rm.add_node(2).await.unwrap();
+    rm.add_node(3).await.unwrap();
+
+    sleep(Duration::from_secs(5)).await;
+
+    // rm.disconnect_node(3).await.unwrap();
+    // rm.disconnect_node(2).await.unwrap();
+    // rm.disconnect_node(1).await.unwrap();
+    rm.disconnect_node(0).await.unwrap();
+
+    sleep(Duration::from_secs(5)).await;
+
+    rm.reconnect_node(2).await.unwrap();
+    rm.reconnect_node(3).await.unwrap();
+
+    sleep(Duration::from_secs(500000000)).await;
 
     let appstate = web::Data::new(ServerState::new(rm).await);
 
@@ -55,5 +72,6 @@ async fn main() -> Result<()> {
     println!("Starting server...");
     println!("Server ready. Listening on 127.0.0.1:8081");
 
-    server.await
+    server.await;
+    Ok(())
 }

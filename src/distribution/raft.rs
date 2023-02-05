@@ -1,4 +1,6 @@
 mod network;
+mod network_handle;
+mod node;
 mod storage;
 
 use std::{collections::HashSet, ops::DerefMut, sync::Arc};
@@ -60,11 +62,11 @@ where
     }
 
     pub async fn disconnect_node(&mut self, id: NodeId) -> Result<()> {
-        self.net.write().await.disconnect_node(id)
+        self.net.write().await.disconnect_node(id).await
     }
 
     pub async fn reconnect_node(&mut self, id: NodeId) -> Result<()> {
-        self.net.write().await.reconnect_node(id)
+        self.net.write().await.reconnect_node(id).await
     }
 }
 

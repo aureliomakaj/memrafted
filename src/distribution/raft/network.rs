@@ -11,25 +11,27 @@ use async_raft::{
         AppendEntriesRequest, AppendEntriesResponse, ClientWriteRequest, InstallSnapshotRequest,
         InstallSnapshotResponse, VoteRequest, VoteResponse,
     },
-    ChangeConfigError, Config, NodeId, Raft, RaftError, RaftNetwork,
+    ChangeConfigError, Config, NodeId, RaftError,
 };
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::{
-    api::{GetKeyQueryParams, SetKeyJsonBody, DropKeyQueryParams},
+    api::{DropKeyQueryParams, GetKeyQueryParams, SetKeyJsonBody},
     cache::{Cache, FullType, GetResult, KeyType, Time, ValueType},
 };
 
-use super::{storage::CacheStorage, CacheRequest, CacheResponse};
-
-type CacheNode<T> = Raft<CacheRequest, CacheResponse, RwLock<CacheNetwork<T>>, CacheStorage<T>>;
+use super::{
+    network_handle::CacheNetworkHandle, node::CacheNode, storage::CacheStorage, CacheRequest,
+    CacheResponse,
+};
 
 pub(super) struct CacheNetwork<T>
 where
     T: Cache + Default + 'static,
 {
     name: String,
+    members: HashSet<NodeId>,
     nodes: HashMap<NodeId, (bool, CacheNode<T>)>,
     config: Arc<Config>,
     weak_self: Weak<RwLock<Self>>,
@@ -39,16 +41,17 @@ impl<T> CacheNetwork<T>
 where
     T: Cache + Default + 'static,
 {
-    pub(crate) fn new(name: String) -> Arc<RwLock<Self>> {
+    pub fn new(name: String) -> Arc<RwLock<Self>> {
         Arc::new_cyclic(|ws| {
             RwLock::new(Self {
                 name: name.clone(),
+                members: HashSet::new(),
                 nodes: HashMap::new(),
                 config: Arc::new(
                     Config::build(name)
-                        .election_timeout_min(20 * 1000) // 20 secs
-                        .election_timeout_max(50 * 1000) // 50 secs
-                        .heartbeat_interval(5 * 1000)
+                        .election_timeout_min(2 * 1000) // 20 secs
+                        .election_timeout_max(5 * 1000) // 50 secs
+                        .heartbeat_interval(1 * 1000)
                         .validate()
                         .unwrap(),
                 ),
@@ -57,7 +60,11 @@ where
         })
     }
 
-    pub(crate) async fn add_node(&mut self, id: NodeId) -> Result<()> {
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
+    pub async fn add_node(&mut self, id: NodeId) -> Result<()> {
         if self.nodes.contains_key(&id) {
             warn!(
                 "Attempting to insert node {} in network {}. Node {} already exists!",
@@ -66,14 +73,15 @@ where
             return Err(anyhow!("Node {} already exists!", id));
         }
         let config = self.config.clone();
-        let network = self.weak_self.upgrade().unwrap();
+        let network = CacheNetworkHandle::new(id, self.weak_self.clone());
         let storage = Arc::new(CacheStorage::new(id));
         let node = CacheNode::new(id, config, network, storage);
 
-        let mut members: HashSet<_> = self.nodes.iter().map(|(i, _)| *i).collect();
-        members.insert(id);
-        if members.len() == 1 {
-            node.initialize(members.clone()).await.unwrap_or_default();
+        self.members.insert(id);
+        if self.members.len() == 1 {
+            node.initialize(self.members.clone())
+                .await
+                .unwrap_or_default();
             self.nodes.insert(id, (true, node));
             return Ok(());
         }
@@ -84,8 +92,7 @@ where
         while let Err(ChangeConfigError::NodeNotLeader(Some(l))) = res {
             match self.nodes.get(&l) {
                 Some((true, ln)) => {
-                    res = ln.add_non_voter(id).await;
-                    res = ln.change_membership(members.clone()).await;
+                    res = ln.change_membership(self.members.clone()).await;
                 }
                 Some((false, _)) => {
                     return Err(anyhow!(
@@ -103,7 +110,7 @@ where
                 }
             }
         }
-        
+
         self.nodes.insert(id, (true, node));
         match res {
             Ok(_) => Ok(()),
@@ -129,7 +136,7 @@ where
         }
     }
 
-    pub(crate) async fn remove_node(&mut self, id: NodeId) -> Result<()> {
+    pub async fn remove_node(&mut self, id: NodeId) -> Result<()> {
         if !self.nodes.contains_key(&id) {
             warn!(
                 "Attempting to remove node {} from network {}. Node {} does not exists!",
@@ -138,15 +145,43 @@ where
             return Err(anyhow!("Node {} does not exists!", id));
         }
 
-        let (_, n) = self.nodes.remove(&id).unwrap();
+        self.members.remove(&id);
+        let (_, n) = self.nodes.get(&id).unwrap();
+
+        let lo = n.current_leader().await;
+        let mut res = Err(ChangeConfigError::NodeNotLeader(lo));
+        while let Err(ChangeConfigError::NodeNotLeader(Some(l))) = res {
+            match self.nodes.get(&l) {
+                Some((true, ln)) => {
+                    res = ln.change_membership(self.members.clone()).await;
+                }
+                Some((false, _)) => {
+                    return Err(anyhow!(
+                        "Suggested leader {} is not reachable in network {}",
+                        l,
+                        self.name
+                    ))
+                }
+                None => {
+                    return Err(anyhow!(
+                        "Suggested leader {} does not exists in network {}",
+                        l,
+                        self.name
+                    ))
+                }
+            }
+        }
+
         n.shutdown().await?;
+        self.nodes.remove(&id);
         Ok(())
     }
 
-    pub(crate) fn disconnect_node(&mut self, id: NodeId) -> Result<()> {
+    pub(crate) async fn disconnect_node(&mut self, id: NodeId) -> Result<()> {
         match self.nodes.get(&id) {
-            Some((true, _)) => {
+            Some((true, n)) => {
                 info!("Disconnecting node {} from network {}", id, self.name);
+                n.disconnect().await;
                 self.nodes.entry(id).and_modify(|(c, _)| *c = false);
                 Ok(())
             }
@@ -167,10 +202,11 @@ where
         }
     }
 
-    pub(crate) fn reconnect_node(&mut self, id: NodeId) -> Result<()> {
+    pub async fn reconnect_node(&mut self, id: NodeId) -> Result<()> {
         match self.nodes.get(&id) {
-            Some((false, _)) => {
-                info!("Reconnecting node {} to network {}", id, self.name);
+            Some((false, n)) => {
+                info!("Disconnecting node {} from network {}", id, self.name);
+                n.reconnect().await;
                 self.nodes.entry(id).and_modify(|(c, _)| *c = true);
                 Ok(())
             }
@@ -218,21 +254,16 @@ where
         }
         Err(anyhow!("Write error!"))
     }
-}
 
-#[async_trait]
-impl<T> RaftNetwork<CacheRequest> for RwLock<CacheNetwork<T>>
-where
-    T: Cache + Default + 'static,
-{
-    async fn append_entries(
+    pub async fn append_entries(
         &self,
         target: NodeId,
         rpc: AppendEntriesRequest<CacheRequest>,
     ) -> Result<AppendEntriesResponse> {
-        match self.read().await.nodes.get(&target) {
+        match self.nodes.get(&target) {
             Some((true, n)) => {
                 info!("AppendEntriesRequest for node {}", target);
+                n.metrics().await;
                 match n.append_entries(rpc).await {
                     Ok(o) => Ok(o),
                     Err(e) => match e {
@@ -243,19 +274,23 @@ where
                     },
                 }
             }
-            _ => {
+            Some((false, _)) => {
+                warn!("Node {} is not reachable.", target);
+                Err(anyhow!("Node {} is not reachable.", target))
+            }
+            None => {
                 warn!("Node {} does not exists.", target);
                 Err(anyhow!("Node {} does not exists.", target))
             }
         }
     }
 
-    async fn install_snapshot(
+    pub async fn install_snapshot(
         &self,
         target: NodeId,
         rpc: InstallSnapshotRequest,
     ) -> Result<InstallSnapshotResponse> {
-        match self.read().await.nodes.get(&target) {
+        match self.nodes.get(&target) {
             Some((true, n)) => {
                 info!("InstallSnapshotRequest for node {}", target);
                 match n.install_snapshot(rpc).await {
@@ -275,8 +310,8 @@ where
         }
     }
 
-    async fn vote(&self, target: NodeId, rpc: VoteRequest) -> Result<VoteResponse> {
-        match self.read().await.nodes.get(&target) {
+    pub async fn vote(&self, target: NodeId, rpc: VoteRequest) -> Result<VoteResponse> {
+        match self.nodes.get(&target) {
             Some((true, n)) => {
                 info!("VoteRequest for node {}", target);
                 match n.vote(rpc).await {
@@ -345,7 +380,7 @@ where
 
     async fn drop(&mut self, key: &KeyType) {
         let req = CacheRequest::DropKey(DropKeyQueryParams {
-            key: key.to_string()
+            key: key.to_string(),
         });
         match self.get_leader().await {
             Some(l) => {
