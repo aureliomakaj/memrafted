@@ -1,8 +1,7 @@
 curl -H "Content-type: application/json" -d '{ "name": "server1" }' 'http://127.0.0.1:8081/add-cache'
 
 make_json () {
-    t=`date +%s`
-    json="{ \"key\": \"$1\", \"value\": \"$2\", \"exp_time\": $(expr $t + $3) }"
+    json="{ \"key\": \"$1\", \"value\": \"$2\", \"exp_time\": $3 }"
 }
 
 make_json "k_1" "v_1" 300
