@@ -7,7 +7,7 @@ use std::io::Result;
 
 use actix_web::{web, App, HttpServer};
 
-use crate::api::{add_server, get_key, remove_server, set_key, ServerState};
+use crate::api::{add_server, drop_key, get_key, remove_server, set_key, ServerState};
 use crate::cache::local::LocalCache;
 // use crate::distribution::orchestrator::HashOrchestrator;
 use crate::distribution::raft::RaftManager;
@@ -35,6 +35,10 @@ async fn main() -> Result<()> {
             .route(
                 "/set-key",
                 web::post().to(set_key::<RaftManager<LocalCache>>),
+            )
+            .route(
+                "/drop-key",
+                web::post().to(drop_key::<RaftManager<LocalCache>>),
             )
         // .route(
         //     "/add-cache",
