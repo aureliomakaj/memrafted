@@ -72,15 +72,19 @@ where
 
         let mut members: HashSet<_> = self.nodes.iter().map(|(i, _)| *i).collect();
         members.insert(id);
-        node.initialize(members.clone()).await.unwrap_or_default();
+        if members.len() == 1 {
+            node.initialize(members.clone()).await.unwrap_or_default();
+            self.nodes.insert(id, (true, node));
+            return Ok(());
+        }
 
-        self.nodes.insert(id, (true, node));
-
-        let mut res = Err(ChangeConfigError::NodeNotLeader(Some(id)));
+        let leader_opt = self.get_leader().await;
+        let mut res = Err(ChangeConfigError::NodeNotLeader(leader_opt));
 
         while let Err(ChangeConfigError::NodeNotLeader(Some(l))) = res {
             match self.nodes.get(&l) {
                 Some((true, ln)) => {
+                    res = ln.add_non_voter(id).await;
                     res = ln.change_membership(members.clone()).await;
                 }
                 Some((false, _)) => {
@@ -99,7 +103,8 @@ where
                 }
             }
         }
-
+        
+        self.nodes.insert(id, (true, node));
         match res {
             Ok(_) => Ok(()),
             Err(e) => match e {
