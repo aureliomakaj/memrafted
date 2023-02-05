@@ -40,14 +40,14 @@ async fn main() -> Result<()> {
                 "/drop-key",
                 web::post().to(drop_key::<RaftManager<LocalCache>>),
             )
-        // .route(
-        //     "/add-cache",
-        //     web::post().to(add_server::<RaftManager<LocalCache>>),
-        // )
-        // .route(
-        //     "/remove-cache",
-        //     web::post().to(remove_server::<RaftManager<LocalCache>>),
-        // )
+            // .route(
+            //     "/add-cache",
+            //     web::post().to(add_server::<RaftManager<LocalCache>>),
+            // )
+            // .route(
+            //     "/remove-cache",
+            //     web::post().to(remove_server::<RaftManager<LocalCache>>),
+            // )
     })
     .bind(("127.0.0.1", 8081))?
     .run();
