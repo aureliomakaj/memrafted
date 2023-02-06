@@ -9,7 +9,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    std::env::set_var("RUST_LOG", "info");
+    std::env::set_var("RUST_LOG", "debug");
     //std::env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
 
@@ -22,14 +22,14 @@ async fn main() -> Result<()> {
 
     let cfg = LoadConfig {
         workers_n: 8,
-        keys_n: 1000,
-        padding: std::iter::repeat("*").take(1000000).collect::<String>(),
+        keys_n: 100,
+        padding: std::iter::repeat("*").take(2).collect::<String>(),
     };
 
     info!("Loading values...");
-    load_values(&http_addrs, &cfg).await;
+    load_values(&String::from(http_addrs), &cfg).await;
     info!("Values loaded.");
-    run_test(&http_addrs, &cfg).await;
+    run_test(&String::from(http_addrs), &cfg).await;
 
     info!("Starting server...");
     info!("Server ready. Listening on {:#?}", addrs);

@@ -2,12 +2,12 @@ use std::{
     collections::HashMap, fmt::Display, iter, net::ToSocketAddrs, sync::Arc, time::Duration,
 };
 
-use futures::{stream, StreamExt};
+use futures::{stream::{self, FuturesUnordered}, StreamExt, future::join_all};
 use log::info;
 use reqwest::Client;
-use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep, join};
 
-use crate::api::SetKeyJsonBody;
+use crate::api::{SetKeyJsonBody, GetKeyQueryParams};
 
 pub struct LoadConfig {
     pub workers_n: usize,
@@ -42,28 +42,39 @@ pub struct TestConfig {
 }
 
 fn get_random_key(c: Arc<Mutex<Client>>, a: &String) {
-    c.get(format!("{}/get-key", a)).build().unwrap().body();
+    //c.get(format!("{}/get-key", a)).build().unwrap().body();
 }
 
 async fn make_thread(d: Duration, addrs: String) -> JoinHandle<usize> {
-    tokio::spawn(async {
-        // let stop = sleep(d);
-        let count = Arc::new(Mutex::new(0));
+    let count = Arc::new(Mutex::new(0));
+    tokio::spawn(async move{
+        let stop = sleep(d.clone());
         let client = Client::new();
-        stream::repeat((client, addrs))
-            // .take_until(stop)
-            .for_each(|(c, a)| async {
+        stream::repeat(addrs)
+            .take_until(stop)
+            .for_each(|a| async move{
                 // get_random_key(c, &a);
-                *count.lock().await = *count.lock().await + 1;
+                let client = Client::new();
+                client.get(format!("{}/get-key", a))
+                .query(&GetKeyQueryParams {
+                    key: String::from("K_1"),
+                    now: 1
+                })
+                .send()
+                .await
+                .unwrap();
+
+                //*count.lock().await = *count.lock().await + 1;
             })
             .await;
-        let x = count.lock().await.to_owned();
-        x
+        //let x = count.lock().await.to_owned();
+        0
     })
 }
 
-pub async fn run_test(addrs: &String, cfg: &TestConfig) {
-    let workers: HashMap<_, _> = iter::repeat((cfg.time))
+pub async fn run_test(addrs: &String, cfg: &LoadConfig) {
+    let duration = Duration::from_secs(50);
+    let workers: HashMap<_, _> = iter::repeat(duration)
         .take(cfg.workers_n)
         .enumerate()
         .collect();
@@ -75,4 +86,6 @@ pub async fn run_test(addrs: &String, cfg: &TestConfig) {
             (i, t)
         })
         .collect();
+
+    join_all(threads.into_iter().map(|(k,v)| v)).await;
 }
