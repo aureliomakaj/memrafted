@@ -29,10 +29,10 @@ async fn main() -> Result<()> {
     load_values(&String::from(http_addrs), &lcfg).await;
 
     let tcfg = TestConfig {
-        time: Duration::from_secs(60),
+        time: Duration::from_secs(1),
         workers_n: 3,
         req_sec: 1,
-        keys_n: 100,
+        keys_n: 5,
     };
 
     info!("Values loaded.");

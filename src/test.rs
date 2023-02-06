@@ -5,6 +5,7 @@ use futures::{future::join_all, StreamExt};
 use log::info;
 use rand::{distributions::Uniform, prelude::Distribution};
 use reqwest::Client;
+use tokio::sync::RwLock;
 use tokio::{sync::Mutex, time::sleep};
 
 use crate::api::{GetKeyQueryParams, SetKeyJsonBody};
@@ -53,32 +54,38 @@ async fn get_key(c: &Client, a: &String, k: &u32) {
 }
 
 fn thread_main(d: Duration, i: Duration, addrs: String, keys_n: u32) -> usize {
-    let count = Arc::new(Mutex::new(0));
+    let count = Arc::new(RwLock::new(0));
     let stop = sleep(d.clone());
-    let client = Arc::new(Mutex::new(Client::new()));
+    let client = Arc::new(RwLock::new(Client::new()));
     let rng = rand::thread_rng();
     let die = Uniform::from(1..keys_n);
-
+    
     let keys = stream::iter(die.sample_iter(rng));
     let args = stream::repeat((client, addrs, count.clone()));
-
+    
     let task = args.zip(keys).take_until(stop).for_each_concurrent(
-        None,
+        Some(keys_n as usize),
         |((c, a, count), k)| async move {
+            info!("Executing");
             let sleep = sleep(i);
-            get_key(&*c.lock().await, &a, &k).await;
-            *count.lock().await = *count.lock().await + 1;
-            sleep.await
+            get_key(&*c.read().await, &a, &k).await;
+            let mut lock = count.write().await;
+            *lock += 1;
+            info!("Increased");
+            sleep.await;
+            info!("After I slept");
         },
     );
+    info!("Before block on");
     block_on(task);
-
-    let ret = *block_on(count.lock());
+    info!("After block");
+    let ret = *block_on(count.read());
     ret
 }
 
 pub async fn run_test(addrs: &String, cfg: &TestConfig) -> usize {
     let int = cfg.time.clone() / cfg.req_sec * cfg.workers_n;
+    info!("Duration {:?}", int);
 
     let threads = stream::repeat((cfg.time, int, addrs.clone(), cfg.keys_n))
         .take(cfg.workers_n as usize)
