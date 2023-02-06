@@ -1,16 +1,39 @@
-use futures::executor::block_on;
-use memrafted::{cache::local::LocalCache, setup::start_server};
-use std::io::Result;
+use memrafted::{
+    cache::local::LocalCache,
+    setup::start_server,
+    test::{load_values, run_test, LoadConfig},
+};
+use std::{io::Result, time::Duration};
+use tokio::time::sleep;
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    std::env::set_var("RUST_LOG", "info");
+    //std::env::set_var("RUST_BACKTRACE", "1");
+    env_logger::init();
+
     let cache = LocalCache::default();
-    let addrs = ("127.0.0.1", 8081);
-    let server = block_on(start_server(cache, addrs)).unwrap();
+    let addrs = "127.0.0.1:8081";
+    let http_addrs = "http://127.0.0.1:8081";
+
+    let server_thread =
+        tokio::spawn(async move { start_server(cache, addrs).await.unwrap().await });
+
+    let cfg = LoadConfig {
+        workers_n: 8,
+        keys_n: 1000,
+        padding: std::iter::repeat("*").take(1000000).collect::<String>(),
+    };
+
+    info!("Loading values...");
+    load_values(&http_addrs, &cfg).await;
+    info!("Values loaded.");
+    run_test(&http_addrs, &cfg).await;
 
     info!("Starting server...");
     info!("Server ready. Listening on {:#?}", addrs);
 
-    server.await
+    server_thread.abort();
+    Ok(())
 }

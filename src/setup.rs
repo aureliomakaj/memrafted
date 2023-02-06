@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::io::Result;
 use std::net::ToSocketAddrs;
 
@@ -11,12 +10,8 @@ use crate::cache::Cache;
 pub async fn start_server<T, A>(cache: T, addrs: A) -> Result<Server>
 where
     T: Cache + 'static,
-    A: ToSocketAddrs + Debug + Clone,
+    A: ToSocketAddrs,
 {
-    std::env::set_var("RUST_LOG", "debug");
-    //std::env::set_var("RUST_BACKTRACE", "1");
-    env_logger::init();
-
     let appstate = web::Data::new(ServerState::new(cache).await);
 
     let server = HttpServer::new(move || {
@@ -26,7 +21,7 @@ where
             .route("/set-key", web::post().to(set_key::<T>))
             .route("/drop-key", web::post().to(drop_key::<T>))
     })
-    .bind(addrs.clone())?
+    .bind(addrs)?
     .run();
 
     Ok(server)
