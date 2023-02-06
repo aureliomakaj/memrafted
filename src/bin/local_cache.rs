@@ -1,16 +1,15 @@
 use memrafted::{
     cache::local::LocalCache,
     setup::start_server,
-    test::{load_values, run_test, LoadConfig},
+    test::{load_values, run_test, LoadConfig, TestConfig},
 };
 use std::{io::Result, time::Duration};
-use tokio::time::sleep;
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     std::env::set_var("RUST_LOG", "debug");
-    //std::env::set_var("RUST_BACKTRACE", "1");
+    std::env::set_var("RUST_BACKTRACE", "full");
     env_logger::init();
 
     let cache = LocalCache::default();
@@ -20,20 +19,29 @@ async fn main() -> Result<()> {
     let server_thread =
         tokio::spawn(async move { start_server(cache, addrs).await.unwrap().await });
 
-    let cfg = LoadConfig {
+    let lcfg = LoadConfig {
         workers_n: 8,
         keys_n: 100,
         padding: std::iter::repeat("*").take(2).collect::<String>(),
     };
 
     info!("Loading values...");
-    load_values(&String::from(http_addrs), &cfg).await;
+    load_values(&String::from(http_addrs), &lcfg).await;
+
+    let tcfg = TestConfig {
+        time: Duration::from_secs(60),
+        workers_n: 3,
+        req_sec: 1,
+        keys_n: 100,
+    };
+
     info!("Values loaded.");
-    run_test(&String::from(http_addrs), &cfg).await;
+    let res = run_test(&String::from(http_addrs), &tcfg).await;
 
     info!("Starting server...");
     info!("Server ready. Listening on {:#?}", addrs);
 
     server_thread.abort();
+    println!("Total requests: {}", res);
     Ok(())
 }

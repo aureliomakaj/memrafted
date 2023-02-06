@@ -21,3 +21,4 @@ tracing-futures = "*"
 async-channel = "1.8.0"
 futures = "*"
 reqwest = { version = "*", features = ["json"] }
+rand = "*"
