@@ -2,7 +2,7 @@ use std::{
     collections::HashMap, fmt::Display, iter, net::ToSocketAddrs, sync::Arc, time::Duration,
 };
 
-use futures::{stream::{self, FuturesUnordered}, StreamExt, future::join_all};
+use futures::{stream::{self, FuturesUnordered}, StreamExt, future::join_all, executor::block_on};
 use log::info;
 use reqwest::Client;
 use tokio::{sync::Mutex, task::JoinHandle, time::sleep, join};
@@ -73,7 +73,7 @@ async fn make_thread(d: Duration, addrs: String) -> JoinHandle<usize> {
 }
 
 pub async fn run_test(addrs: &String, cfg: &LoadConfig) {
-    let duration = Duration::from_secs(50);
+    let duration = Duration::from_secs(5);
     let workers: HashMap<_, _> = iter::repeat(duration)
         .take(cfg.workers_n)
         .enumerate()
@@ -82,10 +82,11 @@ pub async fn run_test(addrs: &String, cfg: &LoadConfig) {
     let threads: HashMap<_, _> = workers
         .into_iter()
         .map(|(i, d)| {
-            let t = make_thread(d, addrs.clone());
+            let t = block_on(make_thread(d, addrs.clone()));
             (i, t)
         })
         .collect();
 
-    join_all(threads.into_iter().map(|(k,v)| v)).await;
+    let a = join_all(threads.into_iter().map(|(k,v)| v)).await;
+    
 }
