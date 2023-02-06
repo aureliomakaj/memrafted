@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cache::{Cache, KeyType, Time, ValueType},
-    distribution::orchestrator::Orchestrator,
+    cache::orchestrator::Orchestrator,
 };
 
 pub struct ServerState<T>
