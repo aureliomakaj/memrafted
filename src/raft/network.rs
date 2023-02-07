@@ -64,7 +64,7 @@ where
         &self.name
     }
 
-    pub async fn add_node(&mut self, id: NodeId) -> Result<()> {
+    pub async fn add_node(&mut self, id: NodeId, cache: T) -> Result<()> {
         if self.nodes.contains_key(&id) {
             warn!(
                 "Attempting to insert node {} in network {}. Node {} already exists!",
@@ -74,7 +74,7 @@ where
         }
         let config = self.config.clone();
         let network = CacheNetworkHandle::new(id, self.weak_self.clone());
-        let storage = Arc::new(CacheStorage::new(id));
+        let storage = Arc::new(CacheStorage::new(id, cache));
         let node = CacheNode::new(id, config, network, storage);
 
         self.members.insert(id);

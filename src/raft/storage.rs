@@ -35,7 +35,7 @@ struct Snapshot {
 }
 
 /// The state machine of the NetworkNode.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct StateMachine<T>
 where
     T: Cache,
@@ -46,12 +46,12 @@ where
 
 impl<T> StateMachine<T>
 where
-    T: Cache + Default,
+    T: Cache,
 {
-    fn new() -> Self {
+    fn new(cache: T) -> Self {
         Self {
             last_applied_log: 0,
-            cache: T::default(),
+            cache,
         }
     }
 }
@@ -84,9 +84,9 @@ where
     T: Cache + Default,
     CacheStorage<T>: Sync,
 {
-    pub fn new(id: NodeId) -> Self {
+    pub fn new(id: NodeId, cache: T) -> Self {
         let log = RwLock::new(BTreeMap::new());
-        let sm = RwLock::new(StateMachine::new());
+        let sm = RwLock::new(StateMachine::new(cache));
         let hs = RwLock::new(None);
         let current_snapshot = RwLock::new(None);
         Self {

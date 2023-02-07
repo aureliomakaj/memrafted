@@ -18,7 +18,6 @@ pub trait Orchestrator: Cache {
 
 // Pool that simulates a distributed cache.
 // It can contain zero or more cache servers
-#[derive(Default)]
 pub struct HashOrchestrator<T>
 where
     T: Cache,
@@ -28,6 +27,18 @@ where
 
     /// Map between the hashed server key and the server key itself
     ring: BTreeMap<u64, String>,
+}
+
+impl<T> Default for HashOrchestrator<T>
+where
+    T: Cache,
+{
+    fn default() -> Self {
+        Self {
+            cache_map: Default::default(),
+            ring: Default::default(),
+        }
+    }
 }
 
 impl<T> HashOrchestrator<T>

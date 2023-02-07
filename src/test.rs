@@ -30,9 +30,13 @@ pub async fn load_values(addrs: &String, cfg: &LoadConfig) {
                 })
                 .send();
             res.await.unwrap();
+            sleep(Duration::from_secs_f32(0.5)).await;
+
             info!("{}/{}", k, cfg.keys_n);
         })
         .await;
+
+    sleep(Duration::from_secs(2)).await;
 }
 
 pub struct TestConfig {
@@ -59,10 +63,10 @@ fn thread_main(d: Duration, i: Duration, addrs: String, keys_n: u32) -> usize {
     let client = Arc::new(RwLock::new(Client::new()));
     let rng = rand::thread_rng();
     let die = Uniform::from(1..keys_n);
-    
+
     let keys = stream::iter(die.sample_iter(rng));
     let args = stream::repeat((client, addrs, count.clone()));
-    
+
     let task = args.zip(keys).take_until(stop).for_each_concurrent(
         Some(keys_n as usize),
         |((c, a, count), k)| async move {

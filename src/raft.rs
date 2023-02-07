@@ -53,8 +53,8 @@ where
         }
     }
 
-    pub async fn add_node(&mut self, id: NodeId) -> Result<()> {
-        self.net.write().await.add_node(id).await
+    pub async fn add_node(&mut self, id: NodeId, cache: T) -> Result<()> {
+        self.net.write().await.add_node(id, cache).await
     }
 
     pub async fn remove_node(&mut self, id: NodeId) -> Result<()> {
