@@ -9,30 +9,27 @@ use crate::{
     hash::hash,
 };
 
+use super::thread::ThreadCache;
+
 #[async_trait]
 pub trait Orchestrator: Cache {
-    type CacheType;
-    async fn add_cache(&mut self, name: String, cache: Self::CacheType);
+    async fn add_cache<T>(&mut self, name: String, cache: T)
+    where
+        T: Cache + Send + Sync + 'static;
     async fn remove_cache(&mut self, name: String);
 }
 
 // Pool that simulates a distributed cache.
 // It can contain zero or more cache servers
-pub struct HashOrchestrator<T>
-where
-    T: Cache,
-{
+pub struct HashOrchestrator {
     /// Map of server key with the actual server
-    cache_map: HashMap<String, T>,
+    cache_map: HashMap<String, ThreadCache>,
 
     /// Map between the hashed server key and the server key itself
     ring: BTreeMap<u64, String>,
 }
 
-impl<T> Default for HashOrchestrator<T>
-where
-    T: Cache,
-{
+impl Default for HashOrchestrator {
     fn default() -> Self {
         Self {
             cache_map: Default::default(),
@@ -41,10 +38,7 @@ where
     }
 }
 
-impl<T> HashOrchestrator<T>
-where
-    T: Cache,
-{
+impl HashOrchestrator {
     /// Implementation of "Ketama Consistent Hashing".
     /// The server key is hashed, and inserted in the ring, possibly multiple times.
     /// When we want to cache a key, we hash the key, and find in the ring the first
@@ -76,10 +70,7 @@ where
 }
 
 #[async_trait]
-impl<T> Cache for HashOrchestrator<T>
-where
-    T: Cache,
-{
+impl Cache for HashOrchestrator {
     async fn get(&mut self, now: Time, key: &KeyType) -> GetResult {
         let hashed_key = hash(key);
         // Get the index of the server with the hashed name nearest to the hashed key
@@ -147,14 +138,12 @@ where
 }
 
 #[async_trait]
-impl<T> Orchestrator for HashOrchestrator<T>
-where
-    T: Cache,
-{
-    type CacheType = T;
-
+impl Orchestrator for HashOrchestrator {
     ///Add a new cache to the pool
-    async fn add_cache(&mut self, name: String, cache: Self::CacheType) {
+    async fn add_cache<T>(&mut self, name: String, cache: T)
+    where
+        T: Cache + Send + Sync + 'static,
+    {
         let mut keys = vec![];
         for i in 0..100 {
             keys.push(format!("{}_{}", name, i));
@@ -162,7 +151,7 @@ where
 
         let cloned = name.clone();
         // Create a new memrafted instace and map it to the server name
-        self.cache_map.insert(name, cache);
+        self.cache_map.insert(name, ThreadCache::start(cache));
         for key in keys {
             self.ring.insert(hash(&key), cloned.clone());
         }

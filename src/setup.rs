@@ -9,7 +9,7 @@ use crate::cache::Cache;
 
 pub async fn start_server<T, A>(cache: T, addrs: A) -> Result<Server>
 where
-    T: Cache + 'static,
+    T: Cache + Send + 'static,
     A: ToSocketAddrs,
 {
     let appstate = web::Data::new(ServerState::new(cache).await);

@@ -38,14 +38,14 @@ impl AppDataResponse for CacheResponse {}
 
 pub struct RaftManager<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     net: Arc<RwLock<CacheNetwork<T>>>,
 }
 
 impl<T> RaftManager<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     pub fn new(name: String) -> Self {
         Self {
@@ -73,7 +73,7 @@ where
 #[async_trait]
 impl<T> Cache for RaftManager<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     async fn get(&mut self, now: Time, k: &KeyType) -> GetResult {
         self.net.write().await.get(now, k).await

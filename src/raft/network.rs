@@ -28,7 +28,7 @@ use super::{
 
 pub(super) struct CacheNetwork<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     name: String,
     members: HashSet<NodeId>,
@@ -39,7 +39,7 @@ where
 
 impl<T> CacheNetwork<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     pub fn new(name: String) -> Arc<RwLock<Self>> {
         Arc::new_cyclic(|ws| {
@@ -335,7 +335,7 @@ where
 #[async_trait]
 impl<T> Cache for CacheNetwork<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     async fn get(&mut self, now: Time, k: &KeyType) -> GetResult {
         let req = CacheRequest::GetKey(GetKeyQueryParams {

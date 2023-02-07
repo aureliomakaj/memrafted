@@ -21,7 +21,7 @@ use super::{network::CacheNetwork, CacheRequest};
 
 pub(super) struct CacheNetworkHandle<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     id: NodeId,
     connected: bool,
@@ -30,7 +30,7 @@ where
 
 impl<T> CacheNetworkHandle<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     pub fn new(id: NodeId, net: Weak<RwLock<CacheNetwork<T>>>) -> Arc<RwLock<Self>> {
         Arc::new(RwLock::new(Self {
@@ -52,7 +52,7 @@ where
 #[async_trait]
 impl<T> RaftNetwork<CacheRequest> for RwLock<CacheNetworkHandle<T>>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     async fn append_entries(
         &self,

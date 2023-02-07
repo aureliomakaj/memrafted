@@ -22,7 +22,7 @@ type CacheRaft<T> =
 
 pub(super) struct CacheNode<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     id: NodeId,
     net: Arc<RwLock<CacheNetworkHandle<T>>>,
@@ -31,7 +31,7 @@ where
 
 impl<T> CacheNode<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     pub fn new(
         id: NodeId,

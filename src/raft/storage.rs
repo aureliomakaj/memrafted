@@ -114,7 +114,7 @@ where
 #[async_trait]
 impl<T> RaftStorage<CacheRequest, CacheResponse> for CacheStorage<T>
 where
-    T: Cache + Default + 'static,
+    T: Cache + Default + Send + Sync + 'static,
 {
     type Snapshot = Cursor<Vec<u8>>;
     type ShutdownError = ShutdownError;

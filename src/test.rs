@@ -6,7 +6,7 @@ use log::info;
 use rand::{distributions::Uniform, prelude::Distribution};
 use reqwest::Client;
 use tokio::sync::RwLock;
-use tokio::{sync::Mutex, time::sleep};
+use tokio::time::sleep;
 
 use crate::api::{GetKeyQueryParams, SetKeyJsonBody};
 

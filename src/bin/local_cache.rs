@@ -1,9 +1,11 @@
 use memrafted::{
     cache::local::LocalCache,
     setup::start_server,
-    test::{load_values, run_test, LoadConfig, TestConfig},
+    test::{load_values, LoadConfig},
+    // test::{run_test, TestConfig},
 };
-use std::{io::Result, time::Duration};
+use std::io::Result;
+// use std::time::Duration;
 use tracing::info;
 
 #[tokio::main]

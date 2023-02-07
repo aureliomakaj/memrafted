@@ -4,8 +4,8 @@ use actix_web::{web, Responder, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cache::{Cache, KeyType, Time, ValueType},
     cache::orchestrator::Orchestrator,
+    cache::{Cache, KeyType, Time, ValueType},
 };
 
 pub struct ServerState<T>
@@ -91,18 +91,16 @@ where
 }
 
 // #[post("/add-cache")]
-pub async fn add_server<T>(
+pub async fn add_server<T, C>(
     data: web::Data<ServerState<T>>,
     json_req: web::Json<AddServerJsonBody>,
 ) -> Result<impl Responder>
 where
     T: Orchestrator,
-    T::CacheType: Default,
+    C: Cache + Default + Send + Sync + 'static,
 {
     let mut inner = data.cache.lock().unwrap();
-    inner
-        .add_cache(json_req.name.clone(), T::CacheType::default())
-        .await;
+    inner.add_cache(json_req.name.clone(), C::default()).await;
     Ok("Ok")
 }
 

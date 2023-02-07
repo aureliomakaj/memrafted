@@ -1,5 +1,6 @@
 pub mod local;
 pub mod orchestrator;
+pub mod thread;
 
 use std::collections::HashSet;
 
@@ -33,7 +34,7 @@ pub enum GetResult {
 }
 
 #[async_trait]
-pub trait Cache: Send + Sync {
+pub trait Cache {
     /// Get the cached valued corresponding to key `key`, `None` if not present or expired
     async fn get(&mut self, &now: Time, key: &KeyType) -> GetResult;
 
